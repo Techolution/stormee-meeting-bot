@@ -1,13 +1,10 @@
-import { joinMeeting, pauseAudio, playAudio, startCaptions, stopCaptions } from "../services/meetBot.js";
+import { joinMeeting, pauseAudio, playAudio, speak, startCaptions, stopCaptions } from "../services/meetBot.js";
 
 let currentMeetingUrl = null;
 
 const startCaptionsController = async (req, res) => {
-  const { meetingUrl } = req.body;
-  if (!meetingUrl) return res.status(400).json({ error: "meetingUrl is required" });
-
-  currentMeetingUrl = meetingUrl;
-  startCaptions(meetingUrl)
+  
+  startCaptions()
     .then(() => console.log("Captions started"))
     .catch((err) => console.error(err));
 
@@ -57,5 +54,14 @@ const stopAudioController=async(req,res)=>{
         res.status(500).json({error:"Failed to pause audio"});
     }
 }
+const speakController=async(req,res)=>{
+    try{
+        await speak(currentMeetingUrl,'/Users/deepanshgupta/Desktop/bot-poc/file_example_WAV_1MG.wav',8000);
+        res.json({message:"Audio played"});
+    }
+    catch(err){
+        res.status(500).json({error:"Failed to play audio"});
+    }
+}
 
-export { startCaptionsController, stopCaptionsController ,startAudioController,loginController,stopAudioController};
+export { startCaptionsController, stopCaptionsController ,startAudioController,loginController,stopAudioController,speakController};
