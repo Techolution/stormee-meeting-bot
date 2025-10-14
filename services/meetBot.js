@@ -12,12 +12,14 @@ async function ensureAuthSession(meetingUrl) {
   browser = await chromium.launch({
     headless: false,
     args: ["--disable-blink-features=AutomationControlled", "--start-maximized",
-        
+        '--use-fake-device-for-media-stream',
+    '--use-fake-ui-for-media-stream', 
+    '--use-file-for-fake-audio-capture=/Users/deepanshgupta/Desktop/bot-poc/file_example_WAV_1MG.wav'
     ],
   });
 
   context = fs.existsSync(AUTH_PATH)
-    ? await browser.newContext({ storageState: AUTH_PATH })
+    ? await browser.newContext({ storageState: AUTH_PATH , permissions:['microphone','camera'] })
     : await browser.newContext();
 
   page = await context.newPage();
@@ -39,41 +41,113 @@ async function ensureAuthSession(meetingUrl) {
 
   return { browser, context, page };
 }
-
+//     async function playAudio(filePath) {
+//     if (!fs.existsSync(filePath)) {
+//       console.error(`❌ Audio file not found at ${filePath}`);
+//       return;
+//     }
+  
+//     if (!page) {
+//       console.error("❌ No meeting page available. Call startCaptions() or joinMeeting() first.");
+//       return;
+//     }
+  
+//     console.log(`🎵 Playing audio: ${filePath}`);
+  
+//     // Inject Web Audio API to play audio into the meeting
+//     await page.evaluate(
+//       async (fileUrl) => {
+//         const response = await fetch(fileUrl);
+//         const arrayBuffer = await response.arrayBuffer();
+//         const context = new AudioContext();
+//         const buffer = await context.decodeAudioData(arrayBuffer);
+//         const source = context.createBufferSource();
+//         source.buffer = buffer;
+//         source.connect(context.destination);
+//         source.start();
+//       },
+//       `file://${path.resolve(filePath)}`
+//     );
+//   }
+async function isMicOn() {
+    if (!page) return false;
+  
+    const micButton = page.locator('button[aria-label*="microphone"]');
+    if ((await micButton.count()) === 0) return false;
+  
+    const label = await micButton.getAttribute('aria-label');
+    // If the label says "Turn off microphone", it means mic is currently ON
+    return label?.toLowerCase().includes("turn off microphone");
+  }
+  
+  async function playAudio() {
+    if (!page) return;
+  
+    const micOn = await isMicOn();
+    if (micOn) {
+      console.log("🎤 Mic is already on, skipping playAudio.");
+      return;
+    }
+  
+    console.log("🎤 Enabling mic...");
+    await page.keyboard.down('Meta'); // Cmd on Mac
+    await page.keyboard.press('KeyD');
+    await page.keyboard.up('Meta');
+  }
+  
+  async function pauseAudio() {
+    if (!page) return;
+  
+    const micOn = await isMicOn();
+    if (!micOn) {
+      console.log("🔇 Mic is already off, skipping pauseAudio.");
+      return;
+    }
+  
+    console.log("🔇 Disabling mic...");
+    await page.keyboard.down('Meta'); // Cmd on Mac
+    await page.keyboard.press('KeyD');
+    await page.keyboard.up('Meta');
+  }
+  
 async function joinMeeting(meetingUrl) {
-  await ensureAuthSession(meetingUrl);
+    await ensureAuthSession(meetingUrl);
+    const guestName = "Guest User";
+  // Wait for the name input if it exists (guest flow)
+  const nameInput = page.locator('input[aria-label="Your name"]');
+  if ((await nameInput.count()) > 0) {
+    await nameInput.fill(guestName);
+    console.log(`📝 Entered guest name: ${guestName}`);
 
-  // Disable mic/camera
-  const aVSettings = await page.getByRole("button", {
-    name: /continue without microphone and camera/i,
-  });
-  await aVSettings.click();
-
-  // Join the meeting
-  const joinNowButton = page.locator('button:has-text("Join now")');
-  const askToJoinButton = page.locator('button:has-text("Ask to join")');
-  await Promise.race([
-    joinNowButton.waitFor({ timeout: 30000 }),
-    askToJoinButton.waitFor({ timeout: 30000 }),
-  ]);
-
-  if ((await joinNowButton.count()) > 0) {
-    await joinNowButton.click();
-  } else if ((await askToJoinButton.count()) > 0) {
+    const askToJoinButton = page.locator('button:has-text("Ask to join")');
     await askToJoinButton.click();
-    await page.waitForSelector('text=You’re in the meeting', { timeout: 60000 }).catch(() => {});
+    console.log("🚀 Clicked 'Ask to join'");
+  } else {
+    // Already logged in user
+    const joinNowButton = page.locator('button:has-text("Join now")');
+    const askToJoinButton = page.locator('button:has-text("Ask to join")');
+    await Promise.race([
+      joinNowButton.waitFor({ timeout: 30000 }),
+      askToJoinButton.waitFor({ timeout: 30000 }),
+    ]);
+
+    if ((await joinNowButton.count()) > 0) {
+      await joinNowButton.click();
+    } else if ((await askToJoinButton.count()) > 0) {
+      await askToJoinButton.click();
+    }
   }
 
-  await turnCaptionsOn(page);
-  await scrapeCaptions(page);
+ 
 
 }
 
 async function startCaptions(meetingUrl) {
   captionsSegments = [];
   scrapingActive = true;
-
-  await joinMeeting(meetingUrl);
+  await turnCaptionsOn(page);
+  await scrapeCaptions(page);
+//   await joinMeeting(meetingUrl);
   
   console.log("🟢 Caption scraping started.");
 }
@@ -244,4 +318,4 @@ async function turnCaptionsOn(page) {
     }
   }
 
-export { startCaptions, stopCaptions };
+export { startCaptions, stopCaptions,playAudio,joinMeeting ,pauseAudio};
