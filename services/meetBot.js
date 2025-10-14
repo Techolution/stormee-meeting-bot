@@ -137,6 +137,20 @@ async function joinMeeting(meetingUrl) {
       await askToJoinButton.click();
     }
   }
+  await page.waitForSelector('button[aria-label*="microphone"]', {
+    timeout: 60000,
+  });
+
+  // 🔇 Ensure mic is OFF when joining
+  const micOn = await isMicOn();
+  if (micOn) {
+    console.log("🔇 Turning off mic after joining...");
+    await pauseAudio();
+  } else {
+    console.log("✅ Mic already off at join time.");
+  }
+
+  console.log("🎥 Joined meeting with mic OFF by default.");
 
  
 
