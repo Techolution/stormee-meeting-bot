@@ -116,17 +116,17 @@ async function joinMeeting(meetingUrl) {
     }
   }
 
-  await page.waitForSelector('button[aria-label*="microphone"]', {
-    timeout: 60000,
-  });
+  // await page.waitForSelector('button[aria-label*="microphone"]', {
+  //   timeout: 60000,
+  // });
 
-  const micOn = await isMicOn();
-  if (micOn) {
-    console.log("🔇 Turning off mic after joining...");
-    await pauseAudio();
-  } else {
-    console.log("✅ Mic already off at join time.");
-  }
+  // const micOn = await isMicOn();
+  // if (micOn) {
+  //   console.log("🔇 Turning off mic after joining...");
+  //   await pauseAudio();
+  // } else {
+  //   console.log("✅ Mic already off at join time.");
+  // }
 
   console.log("🎥 Joined meeting with mic OFF by default.");
 }
@@ -139,12 +139,48 @@ async function startCaptions(meetingUrl) {
   console.log("🟢 Caption scraping started.");
 }
 
-async function stopCaptions() {
-  scrapingActive = false;
-  if (browser) await browser.close();
-  console.log("🔴 Caption scraping stopped.");
-  return captionsSegments;
+async function stopCaptions(page) {
+  try {
+    console.log("🛑 Stopping caption scraping...");
+    scrapingActive = false;
+
+    // Try to turn off captions using keyboard shortcut
+    console.log("⌨️ Sending Shift+C to turn off captions...");
+    await page.bringToFront();
+    await page.focus("body");
+    await page.keyboard.down("Shift");
+    await page.keyboard.press("KeyC");
+    await page.keyboard.up("Shift");
+
+    // Confirm captions turned off
+    const stillActive = await page
+      .evaluate(() => {
+        const regions = Array.from(document.querySelectorAll('[role="region"]'));
+        return regions.some((r) =>
+          r.getAttribute("aria-label")?.toLowerCase().includes("captions")
+        );
+      })
+      .catch(() => false);
+
+    if (!stillActive) {
+      console.log("✅ Captions successfully turned off.");
+    } else {
+      console.warn("⚠️ Captions may still be active — retrying once...");
+      // Retry one more time if still active
+      await page.keyboard.down("Shift");
+      await page.keyboard.press("KeyC");
+      await page.keyboard.up("Shift");
+      console.log("🔁 Retried turning off captions.");
+    }
+
+    console.log("🔴 Caption scraping stopped (browser still open).");
+    return captionsSegments;
+  } catch (err) {
+    console.error("❌ Error while stopping captions:", err.message);
+    return captionsSegments;
+  }
 }
+
 
 async function scrapeCaptions(page) {
   console.log("🕵️ Starting to scrape captions...");
@@ -250,49 +286,56 @@ async function scrapeCaptions(page) {
     }, 3000);
   });
 }
-
 async function turnCaptionsOn(page) {
   console.log("⏳ Waiting for Google Meet interface to load...");
-  await page.waitForSelector(
-    'button[aria-label*="Turn on captions"], button[aria-label*="Show captions"], [aria-label*="More options"]',
-    { timeout: 60000 }
-  );
+  // await page.waitForSelector('[aria-label*="More options"]', { timeout: 60000 });
   console.log("✅ Meeting UI loaded.");
 
-  try {
-    const captionsButton = await page.$(
-      'button[aria-label*="Turn on captions"], button[aria-label*="Show captions"]'
-    );
+  let attempt = 0;
 
-    if (captionsButton) {
-      console.log("🎯 Found captions button, clicking...");
-      await captionsButton.click();
-    } else {
-      console.log("⚠️ Captions button not found, trying keyboard shortcut (Shift+C)");
+  while (true) {
+    attempt++;
+    console.log(`⌨️ Attempt #${attempt}: Sending Shift+C to enable captions...`);
+
+    try {
+      // Focus the page to ensure keypress works
+      await page.bringToFront();
       await page.focus("body");
+
+      // Send the keyboard shortcut
       await page.keyboard.down("Shift");
       await page.keyboard.press("KeyC");
       await page.keyboard.up("Shift");
-      console.log("⌨️ Sent Shift+C to toggle captions.");
+
+      // Check if captions are active
+      const success = await page
+        .waitForFunction(
+          () => {
+            const regions = Array.from(document.querySelectorAll('[role="region"]'));
+            return regions.some((r) =>
+              r.getAttribute("aria-label")?.toLowerCase().includes("captions")
+            );
+          },
+          { timeout: 5000 }
+        )
+        .then(() => true)
+        .catch(() => false);
+
+      if (success) {
+        console.log("✅ Captions successfully turned on!");
+        break;
+      } else {
+        console.log("⚠️ Captions not active yet, retrying...");
+      }
+    } catch (err) {
+      console.warn(`⚠️ Error while toggling captions: ${err.message}`);
     }
 
-    await page.waitForFunction(
-      () => {
-        const captionsRegions = Array.from(
-          document.querySelectorAll('[role="region"]')
-        );
-        return captionsRegions.some((r) =>
-          r.getAttribute("aria-label")?.toLowerCase().includes("captions")
-        );
-      },
-      { timeout: 45000 }
-    );
-
-    console.log("✅ Captions region found and active.");
-  } catch (e) {
-    console.warn("⚠️ Could not enable captions automatically:", e.message);
+    // Wait before retrying
+    await new Promise((resolve) => setTimeout(resolve, 3000));
   }
 }
+
 
 /**
  * 🗣️ Speak Function
