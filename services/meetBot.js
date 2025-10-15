@@ -14,15 +14,13 @@ async function ensureAuthSession(meetingUrl) {
     args: [
       "--disable-blink-features=AutomationControlled",
       "--start-maximized",
-      "--use-fake-device-for-media-stream",
-      "--use-fake-ui-for-media-stream",
+      
     ],
   });
 
   context = fs.existsSync(AUTH_PATH)
     ? await browser.newContext({
         storageState: AUTH_PATH,
-        permissions: ["microphone", "camera"],
       })
     : await browser.newContext();
 
@@ -88,7 +86,12 @@ async function pauseAudio() {
 
 async function joinMeeting(meetingUrl) {
   await ensureAuthSession(meetingUrl);
+
   const guestName = "Guest User";
+  const avSettings = await page.getByRole("button",{
+    name:/continue without microphone and camera/i,
+  })
+  await avSettings.click();
 
   const nameInput = page.locator('input[aria-label="Your name"]');
   if ((await nameInput.count()) > 0) {
