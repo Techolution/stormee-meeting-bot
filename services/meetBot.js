@@ -293,13 +293,13 @@ async function startAudioRecording(meetingId) {
       const audioCtx = new AudioContext();
       const destination = audioCtx.createMediaStreamDestination();
 
-      // Add local stream (optional, can omit if no local audio needed)
-      const localStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(e => {
-        console.warn('Local mic access denied or error:', e);
-        return new MediaStream(); // Empty stream if failed
-      });
-      const localSource = audioCtx.createMediaStreamSource(localStream);
-      localSource.connect(destination);
+      // // Add local stream (optional, can omit if no local audio needed)
+      // const localStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(e => {
+      //   console.warn('Local mic access denied or error:', e);
+      //   return new MediaStream(); // Empty stream if failed
+      // });
+      // const localSource = audioCtx.createMediaStreamSource(localStream);
+      // localSource.connect(destination);
 
       // Add all captured remote streams
       if (window.remoteAudioStreams && window.remoteAudioStreams.length > 0) {
@@ -348,10 +348,10 @@ async function startAudioRecording(meetingId) {
       mediaRecorder.onerror = (event) => console.error("MediaRecorder error:", event.error);
       mediaRecorder.onstop = () => {
         console.log("MediaRecorder stopped");
-        localStream.getTracks().forEach((track) => track.stop());
+        // localStream.getTracks().forEach((track) => track.stop());
       };
 
-      mediaRecorder.start(60000);
+      mediaRecorder.start(600);
       console.log("🎤 MediaRecorder started with 1-minute chunks for full meeting audio");
     } catch (error) {
       console.error("❌ Error starting audio recording:", error);
