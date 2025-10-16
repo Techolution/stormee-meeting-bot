@@ -1,32 +1,79 @@
 import fs from "fs";
 import path from "path";
 import { chromium } from "playwright";
+import { io } from "socket.io-client"; // Import socket.io-client
+import { promisify } from "util";
+import { exec } from "child_process";
+
+const execAsync = promisify(exec);
 
 const AUTH_PATH = path.resolve("auth.json");
 
 let browser, context, page;
 let captionsSegments = [];
 let scrapingActive = false;
+let mediaRecorder = null; // To store the MediaRecorder instance
+let audioChunks = {}; // To store recorded audio data per meetingId: {meetingId: [{chunkId, audioBlob, timestamp}, ...]}
+let recordingInterval = null; // To manage 1-minute chunking
+let socket = null; // To store the WebSocket client instance
+let currentMeetingId = null; // To track the current recording meetingId
 
-async function ensureAuthSession(meetingUrl) {
+async function ensureAuthSession(meetingUrl, asGuest = true) {
+  console.log("🔐 Ensuring authentication session...");
+
   browser = await chromium.launch({
     headless: false,
     args: [
       "--disable-blink-features=AutomationControlled",
       "--start-maximized",
-      
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
     ],
   });
 
-  context = fs.existsSync(AUTH_PATH)
-    ? await browser.newContext({
-        storageState: AUTH_PATH,
-      })
-    : await browser.newContext();
+  // Hook into browser close to save audio if recording
+  const originalClose = browser.close;
+  browser.close = async () => {
+    if (currentMeetingId) {
+      console.log("🛡️ Browser closing detected. Saving audio...");
+      await saveAudio(currentMeetingId);
+    }
+    return originalClose.call(browser);
+  };
+
+  context = await browser.newContext({
+    permissions: ["microphone", "camera"],
+    storageState: asGuest ? undefined : (fs.existsSync(AUTH_PATH) ? AUTH_PATH : undefined),
+  });
 
   page = await context.newPage();
 
-  if (!fs.existsSync(AUTH_PATH)) {
+  // Inject script to override RTCPeerConnection for capturing remote streams early
+  await page.addInitScript(() => {
+    window.remoteAudioStreams = [];
+    const OriginalRTCPeerConnection = window.RTCPeerConnection;
+    window.RTCPeerConnection = function (...args) {
+      const pc = new OriginalRTCPeerConnection(...args);
+      pc.addEventListener('track', (event) => {
+        console.log('Global ontrack event:', event);
+        if (event.track.kind === 'audio') {
+          const remoteStream = event.streams[0];
+          // Create audio element to activate the stream
+          const audio = document.createElement('audio');
+          audio.srcObject = remoteStream;
+          audio.autoplay = true;
+          audio.muted = true; // Prevent actual playback
+          document.body.appendChild(audio);
+          audio.play().catch(e => console.error('Audio play failed:', e));
+          window.remoteAudioStreams.push(remoteStream);
+          console.log('Added remote audio stream to global list.');
+        }
+      });
+      return pc;
+    };
+  });
+
+  if (!asGuest && !fs.existsSync(AUTH_PATH)) {
     const LOGIN_URL =
       "https://accounts.google.com/ServiceLogin" +
       "?service=wise&passive=true&continue=https%3A%2F%2Fmeet.google.com%2F";
@@ -38,100 +85,116 @@ async function ensureAuthSession(meetingUrl) {
     console.log("✅ Login successful. Saved session.");
   } else {
     await page.goto(meetingUrl);
-    console.log("✅ Using existing auth session.");
+    console.log(asGuest ? "✅ Joining as guest." : "✅ Using existing auth session.");
   }
 
   return { browser, context, page };
 }
 
 async function isMicOn() {
-  if (!page) return false;
+  if (!page) {
+    console.error("❌ No meeting page available.");
+    return false;
+  }
 
-  const micButton = page.locator('button[aria-label*="microphone"]');
-  if ((await micButton.count()) === 0) return false;
-
-  const label = await micButton.getAttribute("aria-label");
-  return label?.toLowerCase().includes("turn off microphone");
+  try {
+    const micButton = await page.locator('[data-is-muted="false"]').first();
+    const isMuted = (await micButton.count()) === 0;
+    return !isMuted;
+  } catch (error) {
+    console.error("❌ Error checking microphone status:", error);
+    return false;
+  }
 }
 
 async function playAudio() {
-  if (!page) return;
-
-  const micOn = await isMicOn();
-  if (micOn) {
-    console.log("🎤 Mic is already on, skipping playAudio.");
-    return;
+  try {
+    const micButton = await page
+      .locator('[aria-label*="microphone"], [aria-label*="mic"]')
+      .first();
+    if ((await micButton.count()) > 0) {
+      await micButton.click();
+      console.log("🎤 Audio enabled.");
+    }
+  } catch (error) {
+    console.error("❌ Error enabling audio:", error);
   }
-
-  console.log("🎤 Enabling mic...");
-  await page.keyboard.down("Meta"); // Cmd on Mac
-  await page.keyboard.press("KeyD");
-  await page.keyboard.up("Meta");
 }
 
 async function pauseAudio() {
-  if (!page) return;
-
-  const micOn = await isMicOn();
-  if (!micOn) {
-    console.log("🔇 Mic is already off, skipping pauseAudio.");
-    return;
+  try {
+    const micButton = await page
+      .locator('[aria-label*="microphone"], [aria-label*="mic"]')
+      .first();
+    if ((await micButton.count()) > 0) {
+      await micButton.click();
+      console.log("🔇 Audio paused.");
+    }
+  } catch (error) {
+    console.error("❌ Error pausing audio:", error);
   }
-
-  console.log("🔇 Disabling mic...");
-  await page.keyboard.down("Meta");
-  await page.keyboard.press("KeyD");
-  await page.keyboard.up("Meta");
 }
 
-async function joinMeeting(meetingUrl) {
-  await ensureAuthSession(meetingUrl);
+async function joinMeeting(meetingUrl, asGuest = true) {
+  console.log("🚀 Joining meeting:", meetingUrl);
 
-  const guestName = "Guest User";
-  const avSettings = await page.getByRole("button",{
-    name:/continue without microphone and camera/i,
-  })
-  await avSettings.click();
+  await ensureAuthSession(meetingUrl, asGuest);
 
-  const nameInput = page.locator('input[aria-label="Your name"]');
-  if ((await nameInput.count()) > 0) {
-    await nameInput.fill(guestName);
-    console.log(`📝 Entered guest name: ${guestName}`);
+  // Wait for the page to load
+  await page.waitForLoadState('networkidle');
 
-    const askToJoinButton = page.locator('button:has-text("Ask to join")');
+  const guestName = "Stormee.Ai";
+
+  // If guest mode, handle name input and ask to join
+  if (asGuest) {
+    // Turn off mic and cam if preview shows
+    try {
+      await pauseAudio();
+      // Similarly for camera if needed
+      const camButton = await page.locator('[aria-label*="camera"]').first();
+      if (await camButton.count() > 0) {
+        await camButton.click();
+        console.log("📹 Camera paused.");
+      }
+    } catch (error) {
+      console.error("⚠️ Error pausing media in preview:", error);
+    }
+
+    const nameInput = page.locator('input[aria-label="Your name"], input[placeholder="Your name"]');
+    await nameInput.waitFor({ timeout: 10000 }).catch(() => console.log("⚠️ Name input not found; may be logged in."));
+
+    if (await nameInput.count() > 0) {
+      await nameInput.fill(guestName);
+      console.log(`📝 Entered guest name: ${guestName}`);
+    }
+
+    // Use more reliable selector for Ask to join
+    const askToJoinButton = page.locator('[jsname="UywwFc-RLmnJb"], button:has(span:has-text("Ask to join"))');
+    await askToJoinButton.waitFor({ timeout: 10000 });
     await askToJoinButton.click();
     console.log("🚀 Clicked 'Ask to join'");
   } else {
+    // For logged in, click Join now
     const joinNowButton = page.locator('button:has-text("Join now")');
-    const askToJoinButton = page.locator('button:has-text("Ask to join")');
-    await Promise.race([
-      joinNowButton.waitFor({ timeout: 30000 }),
-      askToJoinButton.waitFor({ timeout: 30000 }),
-    ]);
-
-    if ((await joinNowButton.count()) > 0) {
-      await joinNowButton.click();
-    } else if ((await askToJoinButton.count()) > 0) {
-      await askToJoinButton.click();
-    }
+    await joinNowButton.waitFor({ timeout: 10000 });
+    await joinNowButton.click();
+    console.log("🚀 Clicked 'Join now'");
   }
 
-  // await page.waitForSelector('button[aria-label*="microphone"]', {
-  //   timeout: 60000,
-  // });
+  // Wait for meeting interface
+  await page.waitForSelector('button[aria-label*="microphone"]', { timeout: 60000 });
 
-  // const micOn = await isMicOn();
-  // if (micOn) {
-  //   console.log("🔇 Turning off mic after joining...");
-  //   await pauseAudio();
-  // } else {
-  //   console.log("✅ Mic already off at join time.");
-  // }
+  // Ensure mic is off by default
+  if (await isMicOn()) {
+    await pauseAudio();
+  } else {
+    console.log("✅ Mic already off.");
+  }
 
   console.log("🎥 Joined meeting with mic OFF by default.");
 }
 
-async function startCaptions(meetingUrl) {
+async function startCaptions() {
   captionsSegments = [];
   scrapingActive = true;
   await turnCaptionsOn(page);
@@ -139,318 +202,235 @@ async function startCaptions(meetingUrl) {
   console.log("🟢 Caption scraping started.");
 }
 
-async function stopCaptions(page) {
-  try {
-    console.log("🛑 Stopping caption scraping...");
-    scrapingActive = false;
-
-    // Try to turn off captions using keyboard shortcut
-    console.log("⌨️ Sending Shift+C to turn off captions...");
-    await page.bringToFront();
-    await page.focus("body");
-    await page.keyboard.down("Shift");
-    await page.keyboard.press("KeyC");
-    await page.keyboard.up("Shift");
-
-    // Confirm captions turned off
-    const stillActive = await page
-      .evaluate(() => {
-        const regions = Array.from(document.querySelectorAll('[role="region"]'));
-        return regions.some((r) =>
-          r.getAttribute("aria-label")?.toLowerCase().includes("captions")
-        );
-      })
-      .catch(() => false);
-
-    if (!stillActive) {
-      console.log("✅ Captions successfully turned off.");
-    } else {
-      console.warn("⚠️ Captions may still be active — retrying once...");
-      // Retry one more time if still active
-      await page.keyboard.down("Shift");
-      await page.keyboard.press("KeyC");
-      await page.keyboard.up("Shift");
-      console.log("🔁 Retried turning off captions.");
-    }
-
-    console.log("🔴 Caption scraping stopped (browser still open).");
-    return captionsSegments;
-  } catch (err) {
-    console.error("❌ Error while stopping captions:", err.message);
-    return captionsSegments;
-  }
+async function stopCaptions() {
+  scrapingActive = false;
+  if (browser) await browser.close();
+  console.log("🔴 Caption scraping stopped.");
+  return captionsSegments;
 }
-
 
 async function scrapeCaptions(page) {
-  console.log("🕵️ Starting to scrape captions...");
+  const captionSelector =
+    '[data-testid="caption-text"], .captions-text, .closed-captions-text';
 
-  let index = 0;
-  let captionsLastSeenAt = Date.now();
-  const segments = [];
+  while (scrapingActive) {
+    try {
+      const captionElements = await page.locator(captionSelector).all();
 
-  await page.exposeFunction("onCaption", (speaker, text) => {
-    const trimmedCaption = text.trim();
-    if (trimmedCaption) {
-      const segment = {
-        speaker,
-        text: trimmedCaption,
-        start: index,
-        end: index + 1,
-      };
-      console.log(`🗣️ ${JSON.stringify(segment, null, 2)}`);
-      segments.push(segment);
-      index++;
-      captionsLastSeenAt = Date.now();
-    }
-  });
-
-  await page.evaluate(() => {
-    console.log("Setting up caption MutationObserver...");
-    const captionRegion = document.querySelector(
-      '[role="region"][aria-label*="Captions"]'
-    );
-    if (!captionRegion) {
-      console.warn("⚠️ Caption region not found.");
-      return;
-    }
-
-    let lastKnownSpeaker = "Unknown Speaker";
-    const seenCaptions = new Set();
-
-    const handleNode = (node) => {
-      const speakerElem = node.querySelector(".NWpY1d");
-      let speaker = speakerElem?.textContent?.trim() || lastKnownSpeaker;
-      if (speaker !== "Unknown Speaker") lastKnownSpeaker = speaker;
-
-      const clone = node.cloneNode(true);
-      const speakerLabel = clone.querySelector(".NWpY1d");
-      if (speakerLabel) speakerLabel.remove();
-      const caption = clone.textContent?.trim() || "";
-
-      if (
-        caption &&
-        caption.toLowerCase() !== speaker.toLowerCase() &&
-        !seenCaptions.has(caption)
-      ) {
-        seenCaptions.add(caption);
-        window.onCaption?.(speaker, caption);
-      }
-    };
-
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        const nodes = Array.from(mutation.addedNodes);
-        if (nodes.length > 0) {
-          nodes.forEach((node) => {
-            if (node instanceof HTMLElement) handleNode(node);
+      for (const element of captionElements) {
+        const text = await element.textContent();
+        if (text && text.trim()) {
+          captionsSegments.push({
+            text: text.trim(),
+            timestamp: new Date().toISOString(),
           });
-        } else if (
-          mutation.type === "characterData" &&
-          mutation.target.parentElement instanceof HTMLElement
-        ) {
-          handleNode(mutation.target.parentElement);
         }
       }
-    });
 
-    observer.observe(captionRegion, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      characterDataOldValue: true,
-    });
-  });
-
-  await page.waitForSelector('[role="region"][aria-label*="Captions"]', {
-    timeout: 30000,
-    state: "visible",
-  });
-
-  const MAX_IDLE_TIME = 30000;
-  const MAX_TOTAL_TIME = 6000000;
-  const startTime = Date.now();
-
-  return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const idleTime = now - captionsLastSeenAt;
-      const totalTime = now - startTime;
-
-      if (idleTime > MAX_IDLE_TIME || totalTime > MAX_TOTAL_TIME) {
-        clearInterval(interval);
-        console.log("⌛ Caption scraping finished.");
-        console.log(`🧾 Total segments captured: ${segments.length}`);
-        resolve(segments);
-      }
-    }, 3000);
-  });
+      await page.waitForTimeout(1000); // Check every second
+    } catch (error) {
+      console.error("❌ Error scraping captions:", error);
+      await page.waitForTimeout(5000); // Wait longer on error
+    }
+  }
 }
+
 async function turnCaptionsOn(page) {
-  console.log("⏳ Waiting for Google Meet interface to load...");
-  // await page.waitForSelector('[aria-label*="More options"]', { timeout: 60000 });
-  console.log("✅ Meeting UI loaded.");
-
-  let attempt = 0;
-
-  while (true) {
-    attempt++;
-    console.log(`⌨️ Attempt #${attempt}: Sending Shift+C to enable captions...`);
-
-    try {
-      // Focus the page to ensure keypress works
-      await page.bringToFront();
-      await page.focus("body");
-
-      // Send the keyboard shortcut
-      await page.keyboard.down("Shift");
-      await page.keyboard.press("KeyC");
-      await page.keyboard.up("Shift");
-
-      // Check if captions are active
-      const success = await page
-        .waitForFunction(
-          () => {
-            const regions = Array.from(document.querySelectorAll('[role="region"]'));
-            return regions.some((r) =>
-              r.getAttribute("aria-label")?.toLowerCase().includes("captions")
-            );
-          },
-          { timeout: 5000 }
-        )
-        .then(() => true)
-        .catch(() => false);
-
-      if (success) {
-        console.log("✅ Captions successfully turned on!");
-        break;
-      } else {
-        console.log("⚠️ Captions not active yet, retrying...");
-      }
-    } catch (err) {
-      console.warn(`⚠️ Error while toggling captions: ${err.message}`);
+  try {
+    const captionsButton = await page
+      .locator('[aria-label*="caption"], button:has-text("Turn on captions")')
+      .first();
+    if ((await captionsButton.count()) > 0) {
+      await captionsButton.click();
+      console.log("📝 Captions enabled.");
     }
-
-    // Wait before retrying
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+  } catch (error) {
+    console.error("❌ Error enabling captions:", error);
   }
 }
 
-
-/**
- * 🗣️ Speak Function
- * -----------------
- * Creates a new Chromium instance, joins the meeting using existing auth,
- * streams the provided audio file through the mic, then leaves after playback.
- */
-// async function speak(meetingUrl, audioFilePath, playbackDuration = 8000) {
-//   if (!fs.existsSync(audioFilePath)) {
-//     console.error(`❌ Audio file not found: ${audioFilePath}`);
-//     return;
-//   }
-
-//   console.log(`🎙️ Launching temporary bot to play: ${audioFilePath}`);
-
-//   const tempBrowser = await chromium.launch({
-//     headless: false,
-//     args: [
-//       "--disable-blink-features=AutomationControlled",
-//       "--start-maximized",
-//       "--use-fake-device-for-media-stream",
-//       "--use-fake-ui-for-media-stream",
-//       `--use-file-for-fake-audio-capture=${audioFilePath}`,
-//     ],
-//   });
-
-//   const tempContext = fs.existsSync(AUTH_PATH)
-//     ? await tempBrowser.newContext({
-//         storageState: AUTH_PATH,
-//         permissions: ["microphone", "camera"],
-//       })
-//     : await tempBrowser.newContext();
-
-//   const tempPage = await tempContext.newPage();
-//   await tempPage.goto(meetingUrl);
-
-//   console.log("🔊 Joining meeting to play audio...");
-//   await joinMeeting(meetingUrl);
-
-//   console.log("🎧 Playing fake audio stream...");
-//   await tempPage.waitForTimeout(playbackDuration); // Wait for audio to finish
-
-//   console.log("👋 Leaving meeting...");
-//   await tempBrowser.close();
-//   console.log("✅ Audio playback complete and browser closed.");
-// }
-/**
- * 🗣️ Speak Function (non-destructive)
- * -----------------------------------
- * Creates a new temporary Chromium instance (speaker bot),
- * joins the same meeting using stored auth,
- * streams the provided audio file, then leaves automatically.
- */
-async function speak(meetingUrl, audioFilePath, playbackDuration = 8000) {
-    if (!fs.existsSync(audioFilePath)) {
-      console.error(`❌ Audio file not found: ${audioFilePath}`);
-      return;
-    }
-  
-    console.log(`🎙️ Launching new speaker bot with audio: ${audioFilePath}`);
-  
-    // Launch a completely separate Chromium instance
-    const speakerBrowser = await chromium.launch({
-      headless: false,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--start-maximized",
-        "--use-fake-device-for-media-stream",
-        "--use-fake-ui-for-media-stream",
-        `--use-file-for-fake-audio-capture=${audioFilePath}`,
-      ],
-    });
-  
-    const speakerContext = fs.existsSync(AUTH_PATH)
-      ? await speakerBrowser.newContext({
-          storageState: AUTH_PATH,
-          permissions: ["microphone", "camera"],
-        })
-      : await speakerBrowser.newContext();
-  
-    const speakerPage = await speakerContext.newPage();
-  
-    console.log("🔊 Speaker bot joining meeting...");
-    await speakerPage.goto(meetingUrl, { waitUntil: "domcontentloaded" });
-  
-    // Wait for name input if it's in guest mode
-    const nameInput = speakerPage.locator('input[aria-label="Your name"]');
-    if ((await nameInput.count()) > 0) {
-      await nameInput.fill("Speaker Bot");
-      const askToJoin = speakerPage.locator('button:has-text("Ask to join")');
-      await askToJoin.click();
-      console.log("🚀 Speaker Bot clicked 'Ask to join'");
-    } else {
-      const joinNow = speakerPage.locator('button:has-text("Join now")');
-      const askToJoin = speakerPage.locator('button:has-text("Ask to join")');
-      await Promise.race([
-        joinNow.waitFor({ timeout: 30000 }).catch(() => {}),
-        askToJoin.waitFor({ timeout: 30000 }).catch(() => {}),
-      ]);
-      if ((await joinNow.count()) > 0) {
-        await joinNow.click();
-      } else if ((await askToJoin.count()) > 0) {
-        await askToJoin.click();
-      }
-    }
-  
-    console.log("🎧 Speaker bot joined, playing audio...");
-  
-    // Wait for the audio to finish streaming
-    await speakerPage.waitForTimeout(playbackDuration);
-  
-    console.log("👋 Speaker bot leaving meeting...");
-    await speakerBrowser.close();
-  
-    console.log("✅ Speaker bot finished and exited cleanly.");
+async function startAudioRecording(meetingId) {
+  if (!page) {
+    console.error("❌ No meeting page available. Join a meeting first.");
+    return;
   }
-  
-export { startCaptions, stopCaptions, playAudio, joinMeeting, pauseAudio, speak };
+
+  currentMeetingId = meetingId;
+  audioChunks[meetingId] = [];
+
+  console.log("🎙️ Starting full meeting audio recording...");
+
+  // Initialize WebSocket connection
+  socket = io("http://localhost:3000");
+  socket.on("connect", () =>
+    console.log("✅ Connected to WebSocket server for audio streaming.")
+  );
+  socket.on("disconnect", () =>
+    console.log("🔌 Disconnected from WebSocket server.")
+  );
+  socket.on("error", (error) => console.error("❌ WebSocket error:", error));
+
+  // Expose function to send audio chunks from browser to Node.js
+  await page.exposeFunction("sendAudioChunkToNode", (chunk) => {
+    console.log(`📥 Received audio chunk from browser: ${chunk.chunkId}, size: ${chunk.audioBlob.length} bytes, timestamp: ${chunk.timestamp}`);
+    if (socket && socket.connected) {
+      socket.emit("audioChunk", chunk, (response) => {
+        if (response && response.success) {
+          console.log(`✅ Server acknowledged chunk: ${chunk.chunkId}`);
+        } else {
+          console.error(`❌ Server failed to acknowledge chunk: ${chunk.chunkId}`);
+        }
+      });
+    } else {
+      console.warn(`⚠️ Socket not connected; chunk ${chunk.chunkId} not sent to server.`);
+    }
+    audioChunks[chunk.meetingId].push(chunk);
+  });
+
+  // Start recording in browser
+  await page.evaluate(async (meetingId) => {
+    try {
+      const audioCtx = new AudioContext();
+      const destination = audioCtx.createMediaStreamDestination();
+
+      // Add local stream (optional, can omit if no local audio needed)
+      const localStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(e => {
+        console.warn('Local mic access denied or error:', e);
+        return new MediaStream(); // Empty stream if failed
+      });
+      const localSource = audioCtx.createMediaStreamSource(localStream);
+      localSource.connect(destination);
+
+      // Add all captured remote streams
+      if (window.remoteAudioStreams && window.remoteAudioStreams.length > 0) {
+        window.remoteAudioStreams.forEach(stream => {
+          const remoteSource = audioCtx.createMediaStreamSource(stream);
+          remoteSource.connect(destination);
+          console.log('Connected remote stream to mixer.');
+        });
+      } else {
+        console.warn('⚠️ No remote audio streams captured yet.');
+      }
+
+      // Listen for future streams (in case more participants join)
+      window.addEventListener('remoteStreamAdded', (event) => {
+        const stream = event.detail;
+        const remoteSource = audioCtx.createMediaStreamSource(stream);
+        remoteSource.connect(destination);
+        console.log('Connected new remote stream to mixer.');
+      });
+
+      const mixedStream = destination.stream;
+      const mediaRecorder = new MediaRecorder(mixedStream, {
+        mimeType: "audio/webm; codecs=opus",
+      });
+
+      window.mediaRecorder = mediaRecorder;
+
+      let chunkCounter = 0;
+
+      mediaRecorder.ondataavailable = async (event) => {
+        console.log(`📤 Browser: Audio data available for chunk ${meetingId}-${chunkCounter}, size: ${event.data.size} bytes`);
+        if (event.data.size > 0) {
+          const chunkId = `${meetingId}-${chunkCounter++}`;
+          const timestamp = new Date().toISOString();
+          const arrayBuffer = await event.data.arrayBuffer();
+          const audioBlob = Array.from(new Uint8Array(arrayBuffer));
+          window.sendAudioChunkToNode({
+            meetingId,
+            chunkId,
+            timestamp,
+            audioBlob,
+          });
+        }
+      };
+
+      mediaRecorder.onerror = (event) => console.error("MediaRecorder error:", event.error);
+      mediaRecorder.onstop = () => {
+        console.log("MediaRecorder stopped");
+        localStream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start(60000);
+      console.log("🎤 MediaRecorder started with 1-minute chunks for full meeting audio");
+    } catch (error) {
+      console.error("❌ Error starting audio recording:", error);
+    }
+  }, meetingId);
+
+  console.log("✅ Full audio recording started successfully.");
+}
+
+async function saveAudio(meetingId) {
+  if (!audioChunks[meetingId] || audioChunks[meetingId].length === 0) {
+    console.log(`⚠️ No audio chunks to save for meeting ${meetingId}.`);
+    return;
+  }
+
+  console.log(`💾 Saving audio for meeting ${meetingId}...`);
+
+  const sortedChunks = audioChunks[meetingId].sort((a, b) => {
+    const aNum = parseInt(a.chunkId.split('-')[1]);
+    const bNum = parseInt(b.chunkId.split('-')[1]);
+    return aNum - bNum;
+  });
+
+  const buffers = sortedChunks.map(chunk => Buffer.from(chunk.audioBlob));
+  const concatenated = Buffer.concat(buffers);
+
+  const webmPath = `${meetingId}.webm`;
+  fs.writeFileSync(webmPath, concatenated);
+  console.log(`✅ Saved concatenated WebM file: ${webmPath}, size: ${concatenated.length} bytes`);
+
+  const wavPath = `${meetingId}.wav`;
+  try {
+    await execAsync(`ffmpeg -i ${webmPath} -acodec pcm_s16le -ar 48000 -ac 2 ${wavPath}`);
+    console.log(`✅ Converted to WAV: ${wavPath}`);
+    fs.unlinkSync(webmPath);
+  } catch (error) {
+    console.error(`❌ Error converting WebM to WAV: ${error.message}`);
+    console.log(`ℹ️ You can manually convert ${webmPath} to WAV using ffmpeg.`);
+  }
+
+  delete audioChunks[meetingId];
+}
+
+async function stopAudioRecording() {
+  if (!page) {
+    console.error("❌ No meeting page available. Cannot stop recording.");
+    return;
+  }
+
+  console.log("⏹️ Stopping audio recording...");
+
+  await page.evaluate(() => {
+    if (window.mediaRecorder && window.mediaRecorder.state !== "inactive") {
+      window.mediaRecorder.stop();
+      console.log("🛑 MediaRecorder stopped");
+    }
+  });
+
+  if (currentMeetingId) {
+    await saveAudio(currentMeetingId);
+    currentMeetingId = null;
+  }
+
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+    console.log("🔌 WebSocket disconnected.");
+  }
+
+  console.log("✅ Audio recording stopped successfully.");
+}
+
+export {
+  startCaptions,
+  stopCaptions,
+  playAudio,
+  joinMeeting,
+  pauseAudio,
+  startAudioRecording,
+  stopAudioRecording,
+  isMicOn,
+};
