@@ -19,6 +19,8 @@ let socket = null; // To store the WebSocket client instance
 let currentMeetingId = null; // To track the current recording meetingId
 let chatSegments = [];
 let chatScrapingActive = true;
+let participantCount=0;
+let participantMonitorInterval = null; // To store the interval for participant 
 
 async function ensureAuthSession(meetingUrl, asGuest = true) {
   console.log("🔐 Ensuring authentication session...");
@@ -194,6 +196,13 @@ async function joinMeeting(meetingUrl, asGuest = true) {
   }
   startChatScraping();
   console.log("🎥 Joined meeting with mic OFF by default.");
+  if(page){
+
+  
+   participantCount=await getParticipantCount();
+   startParticipantMonitoring();
+  console.log("Total participant count is: ",participantCount);
+  }
 }
 
 async function startCaptions() {
@@ -632,8 +641,73 @@ async function stopChatScraping() {
   return chatSegments;
 }
 
+// Count participants using DOM selectors
+async function getParticipantCount() {
+  if (!page) {
+    console.error("❌ No meeting page available. Cannot count participants.");
+    return 0;
+  }
 
+  const maxRetries = 8;
+  const retryDelay = 5000;
 
+  async function attemptParticipantCount(attempt = 1) {
+    try {
+      await page.waitForSelector('[data-participant-id]', { timeout: 10000 });
+      const participantElements = await page.$$('[data-participant-id]');
+      const count = participantElements.length;
+      console.log(`👥 Participant count: ${count}`);
+      return count;
+    } catch (error) {
+      if (attempt <= maxRetries) {
+        console.log(`⚠️ Participants not found. Retrying (${attempt}/${maxRetries}) in ${retryDelay/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        return await attemptParticipantCount(attempt + 1);
+      } else {
+        console.error("❌ Participants not found after maximum retries.");
+        return 0;
+      }
+    }
+  }
+
+  return await attemptParticipantCount();
+}
+function startParticipantMonitoring() {
+  if (participantMonitorInterval) {
+    console.log("ℹ️ Participant monitoring already active.");
+    return;
+  }
+
+  console.log("🟢 Starting participant monitoring every 2 seconds...");
+  let lastCount = participantCount;
+
+  participantMonitorInterval = setInterval(async () => {
+    if (!page || !chatScrapingActive) {
+      console.log("⚠️ Stopping participant monitoring: page unavailable or chat scraping stopped.");
+      stopParticipantMonitoring();
+      return;
+    }
+
+    try {
+      const newCount = await getParticipantCount();
+      if (newCount !== lastCount) {
+        console.log(`🔄 Participant count changed from ${lastCount} to ${newCount}`);
+        participantCount = newCount;
+      }
+      lastCount = newCount;
+    } catch (error) {
+      console.error("❌ Error during participant monitoring:", error);
+    }
+  }, 2000);
+}
+
+function stopParticipantMonitoring() {
+  if (participantMonitorInterval) {
+    clearInterval(participantMonitorInterval);
+    participantMonitorInterval = null;
+    console.log("🔴 Participant monitoring stopped.");
+  }
+}
 
 export {
   startCaptions,
