@@ -192,7 +192,7 @@ async function joinMeeting(meetingUrl, asGuest = true) {
   } else {
     console.log("✅ Mic already off.");
   }
-
+  startChatScraping();
   console.log("🎥 Joined meeting with mic OFF by default.");
 }
 
@@ -258,68 +258,80 @@ async function startAudioRecording(meetingId) {
   }
 
   currentMeetingId = meetingId;
-  audioChunks[meetingId] = [];
+  audioChunks[meetingId] = audioChunks[meetingId] || [];
 
   console.log("🎙️ Starting full meeting audio recording...");
 
-  // Initialize WebSocket connection
-  socket = io("http://localhost:3000");
-  socket.on("connect", () =>
-    console.log("✅ Connected to WebSocket server for audio streaming.")
-  );
-  socket.on("disconnect", () =>
-    console.log("🔌 Disconnected from WebSocket server.")
-  );
-  socket.on("error", (error) => console.error("❌ WebSocket error:", error));
+  // Initialize WebSocket connection if not already connected
+  if (!socket || !socket.connected) {
+    socket = io("http://localhost:3000");
+    socket.on("connect", () =>
+      console.log("✅ Connected to WebSocket server for audio streaming.")
+    );
+    socket.on("disconnect", () =>
+      console.log("🔌 Disconnected from WebSocket server.")
+    );
+    socket.on("error", (error) => console.error("❌ WebSocket error:", error));
+  }
 
-  // Expose function to send audio chunks from browser to Node.js
-  await page.exposeFunction("sendAudioChunkToNode", (chunk) => {
-    console.log(`📥 Received audio chunk from browser: ${chunk.chunkId}, size: ${chunk.audioBlob.length} bytes, timestamp: ${chunk.timestamp}`);
-    if (socket && socket.connected) {
-      socket.emit("audioChunk", chunk, (response) => {
-        if (response && response.success) {
-          console.log(`✅ Server acknowledged chunk: ${chunk.chunkId}`);
-        } else {
-          console.error(`❌ Server failed to acknowledge chunk: ${chunk.chunkId}`);
-        }
-      });
-    } else {
-      console.warn(`⚠️ Socket not connected; chunk ${chunk.chunkId} not sent to server.`);
-    }
-    audioChunks[chunk.meetingId].push(chunk);
+  // Check if sendAudioChunkToNode is already exposed
+  const isFunctionExposed = await page.evaluate(() => {
+    return typeof window.sendAudioChunkToNode === "function";
   });
+
+  if (!isFunctionExposed) {
+    // Expose function to send audio chunks from browser to Node.js
+    await page.exposeFunction("sendAudioChunkToNode", (chunk) => {
+      console.log(
+        `📥 Received audio chunk from browser: ${chunk.chunkId}, size: ${chunk.audioBlob.length} bytes, timestamp: ${chunk.timestamp}`
+      );
+      if (socket && socket.connected) {
+        socket.emit("audioChunk", chunk, (response) => {
+          if (response && response.success) {
+            console.log(`✅ Server acknowledged chunk: ${chunk.chunkId}`);
+          } else {
+            console.error(`❌ Server failed to acknowledge chunk: ${chunk.chunkId}`);
+          }
+        });
+      } else {
+        console.warn(`⚠️ Socket not connected; chunk ${chunk.chunkId} not sent to server.`);
+      }
+      audioChunks[chunk.meetingId].push(chunk);
+    });
+    console.log("✅ Exposed sendAudioChunkToNode function.");
+  } else {
+    console.log("ℹ️ sendAudioChunkToNode function already exposed, skipping exposure.");
+  }
 
   // Start recording in browser
   await page.evaluate(async (meetingId) => {
     try {
+      // Stop any existing MediaRecorder to prevent conflicts
+      if (window.mediaRecorder && window.mediaRecorder.state !== "inactive") {
+        window.mediaRecorder.stop();
+        console.log("🛑 Stopped existing MediaRecorder before starting new recording.");
+      }
+
       const audioCtx = new AudioContext();
       const destination = audioCtx.createMediaStreamDestination();
 
-      // // Add local stream (optional, can omit if no local audio needed)
-      // const localStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(e => {
-      //   console.warn('Local mic access denied or error:', e);
-      //   return new MediaStream(); // Empty stream if failed
-      // });
-      // const localSource = audioCtx.createMediaStreamSource(localStream);
-      // localSource.connect(destination);
-
       // Add all captured remote streams
       if (window.remoteAudioStreams && window.remoteAudioStreams.length > 0) {
-        window.remoteAudioStreams.forEach(stream => {
+        window.remoteAudioStreams.forEach((stream) => {
           const remoteSource = audioCtx.createMediaStreamSource(stream);
           remoteSource.connect(destination);
-          console.log('Connected remote stream to mixer.');
+          console.log("Connected remote stream to mixer.");
         });
       } else {
-        console.warn('⚠️ No remote audio streams captured yet.');
+        console.warn("⚠️ No remote audio streams captured yet.");
       }
 
       // Listen for future streams (in case more participants join)
-      window.addEventListener('remoteStreamAdded', (event) => {
+      window.addEventListener("remoteStreamAdded", (event) => {
         const stream = event.detail;
         const remoteSource = audioCtx.createMediaStreamSource(stream);
         remoteSource.connect(destination);
-        console.log('Connected new remote stream to mixer.');
+        console.log("Connected new remote stream to mixer.");
       });
 
       const mixedStream = destination.stream;
@@ -332,7 +344,9 @@ async function startAudioRecording(meetingId) {
       let chunkCounter = 0;
 
       mediaRecorder.ondataavailable = async (event) => {
-        console.log(`📤 Browser: Audio data available for chunk ${meetingId}-${chunkCounter}, size: ${event.data.size} bytes`);
+        console.log(
+          `📤 Browser: Audio data available for chunk ${meetingId}-${chunkCounter}, size: ${event.data.size} bytes`
+        );
         if (event.data.size > 0) {
           const chunkId = `${meetingId}-${chunkCounter++}`;
           const timestamp = new Date().toISOString();
@@ -350,7 +364,6 @@ async function startAudioRecording(meetingId) {
       mediaRecorder.onerror = (event) => console.error("MediaRecorder error:", event.error);
       mediaRecorder.onstop = () => {
         console.log("MediaRecorder stopped");
-        // localStream.getTracks().forEach((track) => track.stop());
       };
 
       mediaRecorder.start(600);
@@ -429,117 +442,180 @@ async function startChatScraping() {
   chatSegments = [];
   chatScrapingActive = true;
 
-  try {
-    if (!page) {
-      console.error("❌ No meeting page available. Cannot start chat scraping.");
-      chatScrapingActive = false;
-      return;
-    }
+  const maxRetries = 8;
+  const retryDelay = 5000; // 5 seconds delay between retries
 
-    // Open the chat window
-    const chatButton = await page.locator('[aria-label="Show chat"], button:has-text("Chat")').first();
-    if ((await chatButton.count()) > 0) {
-      await chatButton.click();
-      console.log("💬 Chat window opened.");
-      // Wait for chat panel to be visible
-      const chatPanel = await page.locator('.Ge9Kpc, [aria-live="polite"]').first();
-      await chatPanel.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {
-        console.error("❌ Chat panel did not open.");
+  async function attemptChatScraping(attempt = 1) {
+    try {
+      if (!page) {
+        console.error("❌ No meeting page available. Cannot start chat scraping.");
         chatScrapingActive = false;
-        return;
-      });
-    } else {
-      console.error("❌ Chat button not found.");
-      chatScrapingActive = false;
-      return;
-    }
-
-    // Expose function to send chat messages to Node.js
-    await page.exposeFunction("sendChatMessageToNode", (chatMessage) => {
-      chatSegments.push(chatMessage);
-      console.log("💬 New chat message:", chatMessage);
-      console.log("📋 Current chatSegments:", chatSegments);
-    });
-
-    // Start real-time chat scraping
-    await page.evaluate(() => {
-      const chatContainer = document.querySelector('.Ge9Kpc, [aria-live="polite"]');
-      if (!chatContainer) {
-        console.error("❌ Chat container not found.");
         return;
       }
 
-      const processedMessageIds = new Set();
-
-      const observer = new MutationObserver((mutations) => {
-        mutations.forEach((mutation) => {
-          if (mutation.addedNodes.length) {
-            mutation.addedNodes.forEach((node) => {
-              if (node.nodeType === Node.ELEMENT_NODE && node.matches('div.RLrADb')) {
-                const messageId = node.getAttribute('data-message-id') || 'unknown';
-                if (processedMessageIds.has(messageId)) {
-                  return;
-                }
-                processedMessageIds.add(messageId);
-
-                const senderElement = node.querySelector('div[class="poVWob"] > div');
-                const timestampElement = node.querySelector('.MuzmKe');
-                const textElement = node.querySelector('div[jsname="dTKtvb"] > div');
-                console.log("sender",senderElement);
-                const chatMessage = {
-                  sender: senderElement ? senderElement.textContent.trim() : 'Unknown',
-                  text: textElement ? textElement.textContent.trim() : '',
-                  timestamp: timestampElement ? timestampElement.textContent.trim() : new Date().toISOString(),
-                  messageId: messageId,
-                };
-
-                if (chatMessage.text) {
-                  window.sendChatMessageToNode(chatMessage);
-                }
-              }
-            });
-          }
+      // Open the chat window
+      const chatButton = await page.locator('[aria-label="Show chat"], button:has-text("Chat")').first();
+      if ((await chatButton.count()) > 0) {
+        await chatButton.click();
+        console.log("💬 Chat window opened.");
+        // Wait for chat panel to be visible
+        const chatPanel = await page.locator('.Ge9Kpc, [aria-live="polite"]').first();
+        await chatPanel.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {
+          console.error("❌ Chat panel did not open.");
+          chatScrapingActive = false;
+          return;
         });
-      });
-
-      observer.observe(chatContainer, {
-        childList: true,
-        subtree: true,
-      });
-
-      // Process existing messages
-      const existingMessages = chatContainer.querySelectorAll('div.RLrADb');
-      existingMessages.forEach((node) => {
-        const messageId = node.getAttribute('data-message-id') || 'unknown';
-        if (processedMessageIds.has(messageId)) {
+      } else {
+        if (attempt <= maxRetries) {
+          console.log(`⚠️ Chat button not found. Retrying (${attempt}/${maxRetries}) in ${retryDelay/1000} seconds...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          return await attemptChatScraping(attempt + 1);
+        } else {
+          console.error("❌ Chat button not found after maximum retries.");
+          chatScrapingActive = false;
           return;
         }
-        processedMessageIds.add(messageId);
+      }
 
-        const senderElement = node.querySelector('.poVWob');
-        const timestampElement = node.querySelector('.MuzmKe');
-        const textElement = node.querySelector('div[jsname="dTKtvb"] > div');
-
-        const chatMessage = {
-          sender: senderElement ? senderElement.textContent.trim() : 'Unknown',
-          text: textElement ? textElement.textContent.trim() : '',
-          timestamp: timestampElement ? timestampElement.textContent.trim() : new Date().toISOString(),
-          messageId: messageId,
-        };
-
-        if (chatMessage.text) {
-          window.sendChatMessageToNode(chatMessage);
-        }
+      // Check if sendChatMessageToNode is already exposed
+      const isFunctionExposed = await page.evaluate(() => {
+        return typeof window.sendChatMessageToNode === "function";
       });
 
-      console.log("🟢 Mutation observer started for real-time chat scraping.");
-    });
+      if (!isFunctionExposed) {
+        // Expose function to send chat messages to Node.js
+        await page.exposeFunction("sendChatMessageToNode", async (chatMessage) => {
+          chatSegments.push(chatMessage);
+          console.log("💬 New chat message:", chatMessage);
+          console.log("📋 Current chatSegments:", chatSegments);
 
-    console.log("🟢 Chat scraping started.");
-  } catch (error) {
-    console.error("❌ Error starting chat scraping:", error);
-    chatScrapingActive = false;
+          // Check for commands in the message text (case-insensitive)
+          const messageText = chatMessage.text.toLowerCase();
+          if (messageText.includes("stormee start recording")) {
+            if (currentMeetingId && audioChunks[currentMeetingId]) {
+              console.log("ℹ️ Audio recording already in progress for meeting:", currentMeetingId);
+            } else {
+              const meetingId = currentMeetingId || `meeting-${Date.now()}`;
+              console.log(`🚀 Triggering audio recording for meeting: ${meetingId}`);
+              try {
+                await startAudioRecording(meetingId);
+              } catch (error) {
+                console.error("❌ Error starting audio recording from chat command:", error);
+              }
+            }
+          } else if (messageText.includes("stormee start caption recording")) {
+            if (scrapingActive) {
+              console.log("ℹ️ Caption recording already in progress.");
+            } else {
+              console.log("🚀 Triggering caption recording.");
+              try {
+                await startCaptions();
+              } catch (error) {
+                console.error("❌ Error starting caption recording from chat command:", error);
+              }
+            }
+          }
+          else if (messageText.includes("stormee stop recording")){
+            if (!currentMeetingId || !audioChunks[currentMeetingId]) {
+              console.log("ℹ️ Audio recording not in progress for meeting:", currentMeetingId);
+            }
+            else{
+              try{
+                await stopAudioRecording();
+              }
+              catch(err){
+                console.error("❌ Error stopping audio recording from chat command:", err);
+              }
+            }
+          }
+        });
+        console.log("✅ Exposed sendChatMessageToNode function.");
+      } else {
+        console.log("ℹ️ sendChatMessageToNode function already exposed, skipping exposure.");
+      }
+
+      // Start real-time chat scraping
+      await page.evaluate(() => {
+        const chatContainer = document.querySelector('.Ge9Kpc, [aria-live="polite"]');
+        if (!chatContainer) {
+          console.error("❌ Chat container not found.");
+          return;
+        }
+
+        const processedMessageIds = new Set();
+
+        const observer = new MutationObserver((mutations) => {
+          mutations.forEach((mutation) => {
+            if (mutation.addedNodes.length) {
+              mutation.addedNodes.forEach((node) => {
+                if (node.nodeType === Node.ELEMENT_NODE && node.matches('div.RLrADb')) {
+                  const messageId = node.getAttribute('data-message-id') || 'unknown';
+                  if (processedMessageIds.has(messageId)) {
+                    return;
+                  }
+                  processedMessageIds.add(messageId);
+
+                  const senderElement = node.querySelector('div[class="poVWob"] > div');
+                  const timestampElement = node.querySelector('.MuzmKe');
+                  const textElement = node.querySelector('div[jsname="dTKtvb"] > div');
+                  const chatMessage = {
+                    sender: senderElement ? senderElement.textContent.trim() : 'Unknown',
+                    text: textElement ? textElement.textContent.trim() : '',
+                    timestamp: timestampElement ? timestampElement.textContent.trim() : new Date().toISOString(),
+                    messageId: messageId,
+                  };
+
+                  if (chatMessage.text) {
+                    window.sendChatMessageToNode(chatMessage);
+                  }
+                }
+              });
+            }
+          });
+        });
+
+        observer.observe(chatContainer, {
+          childList: true,
+          subtree: true,
+        });
+
+        // Process existing messages
+        const existingMessages = chatContainer.querySelectorAll('div.RLrADb');
+        existingMessages.forEach((node) => {
+          const messageId = node.getAttribute('data-message-id') || 'unknown';
+          if (processedMessageIds.has(messageId)) {
+            return;
+          }
+          processedMessageIds.add(messageId);
+
+          const senderElement = node.querySelector('.poVWob');
+          const timestampElement = node.querySelector('.MuzmKe');
+          const textElement = node.querySelector('div[jsname="dTKtvb"] > div');
+
+          const chatMessage = {
+            sender: senderElement ? senderElement.textContent.trim() : 'Unknown',
+            text: textElement ? textElement.textContent.trim() : '',
+            timestamp: timestampElement ? timestampElement.textContent.trim() : new Date().toISOString(),
+            messageId: messageId,
+          };
+
+          if (chatMessage.text) {
+            window.sendChatMessageToNode(chatMessage);
+          }
+        });
+
+        console.log("🟢 Mutation observer started for real-time chat scraping.");
+      });
+
+      console.log("🟢 Chat scraping started.");
+    } catch (error) {
+      console.error("❌ Error starting chat scraping:", error);
+      chatScrapingActive = false;
+    }
   }
+
+  // Start the first attempt
+  await attemptChatScraping();
 }
 
 async function stopChatScraping() {
