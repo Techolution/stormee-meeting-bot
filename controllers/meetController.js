@@ -6,6 +6,8 @@ import {
     stopCaptions,
     startAudioRecording,
     stopAudioRecording,
+    stopChatScraping,
+    startChatScraping,
   } from "../services/meetBot.js";
   
   let currentMeetingUrl = null;
@@ -105,6 +107,33 @@ import {
       status: "unknown",
     });
   };
+  const startChatScrapingController=async(req,res)=>{
+    try{
+        
+        await startChatScraping();
+        res.json({
+            message:"Chat scraping started"
+        })
+
+    }
+    catch(err){
+        console.error("Error starting chat scraping:",err);
+        res.status(500).json({error:"Failed to start chat scraping"});
+    }
+  }
+  const stopChatScrapingController=async(req,res)=>{
+    try{
+        await stopChatScraping();
+        res.json({
+            message:"Chat scraping stopped"
+        })
+
+    }
+    catch(err){
+        console.error("Error stopping chat scraping:",err);
+        res.status(500).json({error:"Failed to stop chat scraping"});
+    }
+  }
   
   export {
     startCaptionsController,
@@ -115,5 +144,7 @@ import {
     startRecordingController,
     stopRecordingController,
     getRecordingStatusController,
+    startChatScrapingController,
+    stopChatScrapingController
   };
   

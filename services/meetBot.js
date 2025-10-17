@@ -17,6 +17,8 @@ let audioChunks = {}; // To store recorded audio data per meetingId: {meetingId:
 let recordingInterval = null; // To manage 1-minute chunking
 let socket = null; // To store the WebSocket client instance
 let currentMeetingId = null; // To track the current recording meetingId
+let chatSegments = [];
+let chatScrapingActive = true;
 
 async function ensureAuthSession(meetingUrl, asGuest = true) {
   console.log("🔐 Ensuring authentication session...");
@@ -423,6 +425,139 @@ async function stopAudioRecording() {
 
   console.log("✅ Audio recording stopped successfully.");
 }
+async function startChatScraping() {
+  chatSegments = [];
+  chatScrapingActive = true;
+
+  try {
+    if (!page) {
+      console.error("❌ No meeting page available. Cannot start chat scraping.");
+      chatScrapingActive = false;
+      return;
+    }
+
+    // Open the chat window
+    const chatButton = await page.locator('[aria-label="Show chat"], button:has-text("Chat")').first();
+    if ((await chatButton.count()) > 0) {
+      await chatButton.click();
+      console.log("💬 Chat window opened.");
+      // Wait for chat panel to be visible
+      const chatPanel = await page.locator('.Ge9Kpc, [aria-live="polite"]').first();
+      await chatPanel.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {
+        console.error("❌ Chat panel did not open.");
+        chatScrapingActive = false;
+        return;
+      });
+    } else {
+      console.error("❌ Chat button not found.");
+      chatScrapingActive = false;
+      return;
+    }
+
+    // Expose function to send chat messages to Node.js
+    await page.exposeFunction("sendChatMessageToNode", (chatMessage) => {
+      chatSegments.push(chatMessage);
+      console.log("💬 New chat message:", chatMessage);
+      console.log("📋 Current chatSegments:", chatSegments);
+    });
+
+    // Start real-time chat scraping
+    await page.evaluate(() => {
+      const chatContainer = document.querySelector('.Ge9Kpc, [aria-live="polite"]');
+      if (!chatContainer) {
+        console.error("❌ Chat container not found.");
+        return;
+      }
+
+      const processedMessageIds = new Set();
+
+      const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          if (mutation.addedNodes.length) {
+            mutation.addedNodes.forEach((node) => {
+              if (node.nodeType === Node.ELEMENT_NODE && node.matches('div.RLrADb')) {
+                const messageId = node.getAttribute('data-message-id') || 'unknown';
+                if (processedMessageIds.has(messageId)) {
+                  return;
+                }
+                processedMessageIds.add(messageId);
+
+                const senderElement = node.querySelector('div[class="poVWob"] > div');
+                const timestampElement = node.querySelector('.MuzmKe');
+                const textElement = node.querySelector('div[jsname="dTKtvb"] > div');
+                console.log("sender",senderElement);
+                const chatMessage = {
+                  sender: senderElement ? senderElement.textContent.trim() : 'Unknown',
+                  text: textElement ? textElement.textContent.trim() : '',
+                  timestamp: timestampElement ? timestampElement.textContent.trim() : new Date().toISOString(),
+                  messageId: messageId,
+                };
+
+                if (chatMessage.text) {
+                  window.sendChatMessageToNode(chatMessage);
+                }
+              }
+            });
+          }
+        });
+      });
+
+      observer.observe(chatContainer, {
+        childList: true,
+        subtree: true,
+      });
+
+      // Process existing messages
+      const existingMessages = chatContainer.querySelectorAll('div.RLrADb');
+      existingMessages.forEach((node) => {
+        const messageId = node.getAttribute('data-message-id') || 'unknown';
+        if (processedMessageIds.has(messageId)) {
+          return;
+        }
+        processedMessageIds.add(messageId);
+
+        const senderElement = node.querySelector('.poVWob');
+        const timestampElement = node.querySelector('.MuzmKe');
+        const textElement = node.querySelector('div[jsname="dTKtvb"] > div');
+
+        const chatMessage = {
+          sender: senderElement ? senderElement.textContent.trim() : 'Unknown',
+          text: textElement ? textElement.textContent.trim() : '',
+          timestamp: timestampElement ? timestampElement.textContent.trim() : new Date().toISOString(),
+          messageId: messageId,
+        };
+
+        if (chatMessage.text) {
+          window.sendChatMessageToNode(chatMessage);
+        }
+      });
+
+      console.log("🟢 Mutation observer started for real-time chat scraping.");
+    });
+
+    console.log("🟢 Chat scraping started.");
+  } catch (error) {
+    console.error("❌ Error starting chat scraping:", error);
+    chatScrapingActive = false;
+  }
+}
+
+async function stopChatScraping() {
+  chatScrapingActive = false;
+  await page.evaluate(() => {
+    const chatContainer = document.querySelector('.Ge9Kpc, [aria-live="polite"]');
+    if (chatContainer) {
+      const observer = new MutationObserver(() => {});
+      observer.disconnect();
+      console.log("🛑 Mutation observer stopped.");
+    }
+  });
+  console.log("🔴 Chat scraping stopped.");
+  return chatSegments;
+}
+
+
+
 
 export {
   startCaptions,
@@ -433,4 +568,6 @@ export {
   startAudioRecording,
   stopAudioRecording,
   isMicOn,
+  startChatScraping,
+  stopChatScraping
 };

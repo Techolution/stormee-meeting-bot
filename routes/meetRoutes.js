@@ -8,6 +8,8 @@ import {
   startRecordingController,
   stopRecordingController,
   getRecordingStatusController,
+  startChatScrapingController,
+  stopChatScrapingController,
 } from "../controllers/meetController.js";
 
 const router = express.Router();
@@ -29,5 +31,7 @@ router.post("/pauseaudio", stopAudioController);
 router.post("/record/start", startRecordingController);
 router.post("/record/stop", stopRecordingController);
 router.get("/record/status", getRecordingStatusController);
+router.post('/chat/start',startChatScrapingController);
+router.get('/chat/stop',stopChatScrapingController);
 
 export default router;
