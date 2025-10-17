@@ -215,7 +215,6 @@ async function startCaptions() {
 
 async function stopCaptions() {
   scrapingActive = false;
-  if (browser) await browser.close();
   console.log("🔴 Caption scraping stopped.");
   return captionsSegments;
 }
@@ -672,6 +671,51 @@ async function getParticipantCount() {
 
   return await attemptParticipantCount();
 }
+async function leaveMeeting() {
+  if (!page) {
+    console.error("❌ No meeting page available. Cannot leave meeting.");
+    return;
+  }
+
+  console.log("🚪 Leaving meeting...");
+
+  try {
+    // Stop all active processes
+    await stopChatScraping();
+    await stopAudioRecording();
+    await stopCaptions();
+    stopParticipantMonitoring();
+
+    // Click the "Leave call" button
+    const leaveButton = await page.locator('[aria-label="Leave call"], button:has-text("Leave call")').first();
+    if (await leaveButton.count() > 0) {
+      await leaveButton.click();
+      console.log("🚀 Clicked 'Leave call' button.");
+    } else {
+      console.warn("⚠️ Leave call button not found.");
+    }
+
+    // Close browser resources
+    if (context) {
+      await context.close();
+      console.log("🔒 Context closed.");
+    }
+    if (browser) {
+      await browser.close();
+      console.log("🔒 Browser closed.");
+    }
+
+    // Reset global variables
+    page = null;
+    context = null;
+    browser = null;
+    participantCount = 0;
+
+    console.log("✅ Successfully left the meeting.");
+  } catch (error) {
+    console.error("❌ Error leaving meeting:", error);
+  }
+}
 function startParticipantMonitoring() {
   if (participantMonitorInterval) {
     console.log("ℹ️ Participant monitoring already active.");
@@ -694,7 +738,13 @@ function startParticipantMonitoring() {
         console.log(`🔄 Participant count changed from ${lastCount} to ${newCount}`);
         participantCount = newCount;
       }
+    
       lastCount = newCount;
+      // Check if only the bot remains (count === 1)
+      if (newCount === 1) {
+        console.log("⚠️ Only one participant remains (bot). Exiting meeting...");
+        await leaveMeeting();
+      }
     } catch (error) {
       console.error("❌ Error during participant monitoring:", error);
     }
