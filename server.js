@@ -4,12 +4,35 @@ import meetRoutes from "./routes/meetRoutes.js";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import swaggerJSDoc from "swagger-jsdoc";
+import swaggerUi from "swagger-ui-express";
+
 
 dotenv.config();
 
 const app = express();
 
 // Middleware setup
+const swaggerOptions = {
+  definition: {
+    openapi: "3.0.0",
+    info: {
+      title: "Meet API",
+      version: "1.0.0",
+      description: "API documentation for the Meet service",
+    },
+    servers: [
+      {
+        url: `http://localhost:${process.env.PORT || 5000}/api/meet`,
+      },
+    ],
+  },
+  apis: ["./routes/*.js"],
+};
+
+const swaggerDocs = swaggerJSDoc(swaggerOptions);
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
 app.use(express.json());
 app.use(cors());
 
@@ -56,11 +79,22 @@ io.on("connection", (socket) => {
   });
 
   // Handle connection errors
+  // Handle connection errors
   socket.on("error", (error) => {
     console.error("❌ WebSocket error for client", socket.id, ":", error);
   });
-});
 
+}); // end io.on("connection")
+
+
+app.get('/openapi.json', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.send(swaggerDocs);
+  });
+
+app.get("/", (req, res) => {
+  res.send("API is running...");
+});
 const PORT = process.env.PORT || 5000;
 
 // Start the combined HTTP and WebSocket server
