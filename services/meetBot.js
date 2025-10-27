@@ -22,7 +22,7 @@ let chatScrapingActive = true;
 let participantCount=0;
 let participantMonitorInterval = null; // To store the interval for participant 
 
-async function ensureAuthSession(meetingUrl, asGuest = true) {
+async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log("🔐 Ensuring authentication session...");
 
   browser = await chromium.launch({
@@ -77,14 +77,9 @@ async function ensureAuthSession(meetingUrl, asGuest = true) {
     };
   });
 
-  if (!asGuest && !fs.existsSync(AUTH_PATH)) {
-    const LOGIN_URL =
-      "https://accounts.google.com/ServiceLogin" +
-      "?service=wise&passive=true&continue=https%3A%2F%2Fmeet.google.com%2F";
-
-    await page.goto(LOGIN_URL);
-    console.log("🧑‍💻 Please log in manually.");
-    await page.waitForURL(/https:\/\/meet\.google\.com\/.*/, { timeout: 0 });
+  if ( !fs.existsSync(AUTH_PATH)) {
+    console.log("🔑 No stored authentication found. Performing Google login...");
+    await performGoogleLogin();
     await context.storageState({ path: AUTH_PATH });
     console.log("✅ Login successful. Saved session.");
   } else {
@@ -138,8 +133,49 @@ async function pauseAudio() {
     console.error("❌ Error pausing audio:", error);
   }
 }
+async function performGoogleLogin() {
+  console.log("🔐 Performing Google authentication...");
+  const email=process.env.GOOGLE_ACCOUNT_USER;
+  const password = process.env.GOOGLE_ACCOUNT_PASSWORD;
+  console.log("email",email);
+  console.log("password",password);
+  // Go to Google accounts login
+  const LOGIN_URL = "https://accounts.google.com/ServiceLogin?service=wise&passive=true&continue=https%3A%2F%2Fmeet.google.com%2F";
+  
+  await page.goto(LOGIN_URL);
+  
+  try {
+    // Fill email
+    const emailInput = page.locator('input[type="email"]');
+    await emailInput.waitFor({ timeout: 10000 });
+    await emailInput.fill(email);
+    console.log(`📧 Entered email: ${email}`);
+    
+    // Click Next button
+    const nextButton = page.locator('button:has-text("Next")');
+    await nextButton.click();
+    console.log("➡️ Clicked Next after email");
+    
+    // Wait for password field and fill it
+    const passwordInput = page.locator('input[type="password"]').fill(password);
+    console.log("🔒 Entered password");
+    
+    // Click Next button for password
+    const passwordNext = page.locator('button:has-text("Next")');
+    await passwordNext.click();
+    console.log("➡️ Clicked Next after password");
+    
+    // Wait for successful login (redirect to Meet)
+    await page.waitForURL(/https:\/\/meet\.google\.com\/.*/, { timeout: 30000 });
+    console.log("✅ Successfully authenticated with Google");
+    
+  } catch (error) {
+    console.error("❌ Error during Google login:", error);
+    throw new Error("Failed to authenticate with Google. Please check your credentials.");
+  }
+}
 
-async function joinMeeting(meetingUrl, asGuest = true) {
+async function joinMeeting(meetingUrl, asGuest = false) {
   console.log("🚀 Joining meeting:", meetingUrl);
 
   await ensureAuthSession(meetingUrl, asGuest);
@@ -179,6 +215,17 @@ async function joinMeeting(meetingUrl, asGuest = true) {
     console.log("🚀 Clicked 'Ask to join'");
   } else {
     // For logged in, click Join now
+    try {
+      await pauseAudio();
+      // Similarly for camera if needed
+      const camButton = await page.locator('[aria-label*="camera"]').first();
+      if (await camButton.count() > 0) {
+        await camButton.click();
+        console.log("📹 Camera paused.");
+      }
+    } catch (error) {
+      console.error("⚠️ Error pausing media in preview:", error);
+    }
     const joinNowButton = page.locator('button:has-text("Join now")');
     await joinNowButton.waitFor({ timeout: 10000 });
     await joinNowButton.click();
