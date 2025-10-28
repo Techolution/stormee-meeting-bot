@@ -304,7 +304,7 @@ class MeetBot:
                 print(f"❌ WebSocket connection error: {data}")
             
             try:
-                ws_url = "http://localhost:5000"
+                ws_url = os.getenv("WS_URL","http://localhost:5000")
                 print(f"🔌 Connecting to WebSocket at {ws_url}...")
                 await self.sio.connect(ws_url)
                 await asyncio.sleep(0.5)
