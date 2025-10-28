@@ -1,0 +1,17 @@
+node_modules
+.git
+.env
+*.log
+tmp/
+
+.git
+.gitignore
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+Dockerfile
+README.md
+LICENSE
+.vscode
