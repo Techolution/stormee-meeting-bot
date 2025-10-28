@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package*.json ./
 
 # Install ALL dependencies (including dev) for build
-RUN npm ci
+RUN npm install
 
 # Install Playwright browsers (cached in this stage)
 RUN npx playwright install --with-deps chromium
