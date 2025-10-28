@@ -14,7 +14,7 @@ app.use(express.json());
 app.use(cors());
 
 // API routes
-app.use("/api/meet", meetRoutes);
+app.use("/meeting_recorder_stormee", meetRoutes);
 
 // Create HTTP server from Express app
 const httpServer = createServer(app);
