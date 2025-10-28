@@ -94,4 +94,4 @@ curl --location 'http://localhost:3000/api/meet/record/start' \
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](LICENSE). 
