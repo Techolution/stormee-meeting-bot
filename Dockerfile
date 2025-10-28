@@ -65,6 +65,12 @@ COPY --from=builder /app /app
 # Copy Playwright system deps and browsers (critical!)
 COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
 
+# Copy Playwright browsers for node user
+COPY --from=builder /root/.cache/ms-playwright /home/node/.cache/ms-playwright
+
+# Fix permissions
+RUN chown -R node:node /app /home/node/.cache
+
 # Expose port
 EXPOSE 80
 
