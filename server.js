@@ -61,13 +61,14 @@ io.on("connection", (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT ?? 8080;
+const BACKEND_URL= process.env.BACKEND_URL ?? `http://localhost:${PORT}`;
 
 // Start the combined HTTP and WebSocket server
 httpServer.listen(PORT, () => {
   console.log(`🚀 Express server running on port ${PORT}`);
   console.log(`🔌 WebSocket server running on port ${PORT}`);
   console.log(
-    `📋 API endpoints available at http://localhost:${PORT}/api/meet`
+    `📋 API endpoints available at ${BACKEND_URL}/meeting_recorder_stormee`
   );
 });

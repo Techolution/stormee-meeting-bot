@@ -319,7 +319,8 @@ async function startAudioRecording(meetingId) {
 
   // Initialize WebSocket connection if not already connected
   if (!socket || !socket.connected) {
-    socket = io("http://localhost:3000");
+    const backendURL=process.env.BACKEND_URL??"http://localhost:8080";
+    socket = io(backendURL);
     socket.on("connect", () =>
       console.log("✅ Connected to WebSocket server for audio streaming.")
     );
