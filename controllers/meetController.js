@@ -1,67 +1,96 @@
-import { joinMeeting, pauseAudio, playAudio, speak, startCaptions, stopCaptions } from "../services/meetBot.js";
+import {
+  joinMeeting,
+  pauseAudio,
+  playAudio,
+  startCaptions,
+  stopCaptions,
+} from "../services/meetBot.js";
 
 let currentMeetingUrl = null;
 
 const startCaptionsController = async (req, res) => {
-  
-  startCaptions()
-    .then(() => console.log("Captions started"))
-    .catch((err) => console.error(err));
+  const { meetingUrl } = req.body;
+  if (!meetingUrl) {
+    return res
+      .status(400)
+      .json({ status: "error", message: "meetingUrl is required" });
+  }
 
-  res.json({ message: "Captions started" });
+  currentMeetingUrl = meetingUrl;
+  try {
+    await startCaptions(meetingUrl);
+    console.log("Captions started");
+    res.status(200).json({ status: "success", message: "Captions started" });
+  } catch (err) {
+    console.error(err);
+    res
+      .status(500)
+      .json({ status: "error", message: "Failed to start captions" });
+  }
 };
 
 const stopCaptionsController = async (req, res) => {
   try {
     const captions = await stopCaptions();
-    res.json({ message: "Captions stopped", captions });
+    res
+      .status(200)
+      .json({ status: "success", message: "Captions stopped", captions });
   } catch (err) {
-    res.status(500).json({ error: "Failed to stop captions" });
+    console.error(err);
+    res
+      .status(500)
+      .json({ status: "error", message: "Failed to stop captions" });
   }
 };
-const loginController=async(req,res)=>{
-    try {
-        const { meetingUrl } = req.body;
-        if (!meetingUrl) return res.status(400).json({ error: "meetingUrl is required" });
-      
-        currentMeetingUrl = meetingUrl;
-        joinMeeting(meetingUrl)
-          .then(() => console.log("Joined meeting"))
-          .catch((err) => console.error(err));
-          res.json({message:"Meeting joined"})
-    }
-    catch(err){
-        res.status(500).json({ error: "Failed to join meeting" });
-    }
-}
-const startAudioController=async(req,res)=>{
-    try{
-        await playAudio('/Users/deepanshgupta/Desktop/bot-poc/file_example_WAV_1MG.wav');
 
-        res.json({message:"Audio played"});
+const loginController = async (req, res) => {
+  try {
+    const { meetingUrl } = req.body;
+    if (!meetingUrl) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "meetingUrl is required" });
     }
-    catch(err){
-        res.status(500).json({error:"Failed to play audio"});
-    }
-}
-const stopAudioController=async(req,res)=>{
-    try{
-        await pauseAudio();
-        res.json({message:"Audio paused"});
 
-    }
-    catch(err){
-        res.status(500).json({error:"Failed to pause audio"});
-    }
-}
-const speakController=async(req,res)=>{
-    try{
-        await speak(currentMeetingUrl,'/Users/deepanshgupta/Desktop/bot-poc/file_example_WAV_1MG.wav',8000);
-        res.json({message:"Audio played"});
-    }
-    catch(err){
-        res.status(500).json({error:"Failed to play audio"});
-    }
-}
+    currentMeetingUrl = meetingUrl;
+    await joinMeeting(meetingUrl);
+    console.log("Joined meeting");
+    res.status(200).json({ status: "success", message: "Meeting joined" });
+  } catch (err) {
+    console.error(err);
+    res
+      .status(500)
+      .json({ status: "error", message: "Failed to join meeting" });
+  }
+};
 
-export { startCaptionsController, stopCaptionsController ,startAudioController,loginController,stopAudioController,speakController};
+const startAudioController = async (req, res) => {
+  try {
+    // This path should ideally be configurable and not hardcoded
+    await playAudio(
+      "/Users/deepleshgupta/Desktop/bot-poc/file_example_WAV_1MG.wav"
+    );
+    res.status(200).json({ status: "success", message: "Audio played" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: "error", message: "Failed to play audio" });
+  }
+};
+
+const stopAudioController = async (req, res) => {
+  try {
+    await pauseAudio();
+    res.status(200).json({ status: "success", message: "Audio paused" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: "error", message: "Failed to pause audio" });
+  }
+};
+
+export {
+  startCaptionsController,
+  stopCaptionsController,
+  startAudioController,
+  loginController,
+  stopAudioController,
+};
