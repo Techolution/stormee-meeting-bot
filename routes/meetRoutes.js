@@ -10,6 +10,7 @@ import {
   getRecordingStatusController,
   startChatScrapingController,
   stopChatScrapingController,
+  exitMeeting,
 } from "../controllers/meetController.js";
 
 const router = express.Router();
@@ -33,5 +34,6 @@ router.post("/record/stop", stopRecordingController);
 router.get("/record/status", getRecordingStatusController);
 router.post('/chat/start',startChatScrapingController);
 router.get('/chat/stop',stopChatScrapingController);
+router.post('/exit',exitMeeting);
 
 export default router;

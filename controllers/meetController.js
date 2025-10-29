@@ -150,6 +150,7 @@ const exitMeeting=async(req,res)=>{
   
 }  
   export {
+    exitMeeting,
     startCaptionsController,
     stopCaptionsController,
     startAudioController,
