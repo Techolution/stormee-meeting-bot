@@ -5,12 +5,7 @@
   "description": "Start / stop a Google-Meet bot from a popup",
   "action": {
     "default_popup": "popup.html"
-    
   },
-  "permissions": [
-    "storage"
-  ],
-  "host_permissions": [
-    "*://localhost:8080/*"
-  ]
+  "permissions": ["storage"],
+  "host_permissions": ["https://dev.appmod.ai/*"]
 }

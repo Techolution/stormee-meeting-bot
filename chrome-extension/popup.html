@@ -1,31 +1,52 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <meta charset="UTF-8">
-  <title>GMeet Bot Control</title>
-  <style>
-    body {font-family: Arial, sans-serif; width: 300px; padding: 12px; text-align: center;}
-    input, button {margin: 6px 0; width: 100%; padding: 8px; box-sizing: border-box;}
-    #status {margin-top: 10px; font-weight: bold; word-break: break-all;}
-    label {display: block; text-align: left; margin-top: 8px; font-size: 0.9em;}
-  </style>
-</head>
-<body>
-  <h3>GMeet Bot Control</h3>
+  <head>
+    <meta charset="UTF-8" />
+    <title>GMeet Bot Control</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        width: 300px;
+        padding: 12px;
+        text-align: center;
+      }
+      input,
+      button {
+        margin: 6px 0;
+        width: 100%;
+        padding: 8px;
+        box-sizing: border-box;
+      }
+      #status {
+        margin-top: 10px;
+        font-weight: bold;
+        word-break: break-all;
+      }
+      label {
+        display: block;
+        text-align: left;
+        margin-top: 8px;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>GMeet Bot Control</h3>
 
-  <label for="baseUrl">Base URL</label>
+    <label for="meetingUrl">Meeting URL</label>
+    <input
+      id="meetingUrl"
+      type="text"
+      placeholder="https://meet.google.com/abc-defg-hij"
+    />
 
-  <label for="meetingUrl">Meeting URL</label>
-  <input id="meetingUrl" type="text"
-         placeholder="https://meet.google.com/abc-defg-hij">
+    <div>
+      <button id="start-btn">Start</button>
+      <button id="stop-btn">Stop</button>
+    </div>
 
-  <div>
-    <button id="start-btn">Start</button>
-    <button id="stop-btn">Stop</button>
-  </div>
+    <p id="status"></p>
 
-  <p id="status"></p>
-
-  <script src="popup.js"></script>
-</body>
+    <script src="popup.js"></script>
+  </body>
 </html>

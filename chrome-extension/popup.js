@@ -3,50 +3,44 @@ document.addEventListener("DOMContentLoaded", () => {
   const startBtn   = document.getElementById("start-btn");
   const stopBtn    = document.getElementById("stop-btn");
   const statusEl   = document.getElementById("status");
-  const baseUrlIn  = document.getElementById("baseUrl");
   const meetUrlIn  = document.getElementById("meetingUrl");
 
-  // ---------- Default values ----------
-  const DEFAULT_BASE_URL   = "http://dev.appmod.ai";
+  // ---------- FIXED BASE URL ----------
+  const BASE_URL = "https://dev.appmod.ai"; // Fixed, no input, no storage
 
-
-  // ---------- Load persisted values ----------
-  chrome.storage.sync.get(["baseUrl", "meetingUrl"], (data) => {
-    baseUrlIn.value  = data.baseUrl  || DEFAULT_BASE_URL;
-    meetUrlIn.value  = data.meetingUrl ;
+  // ---------- Load only meetingUrl from storage ----------
+  chrome.storage.sync.get(["meetingUrl"], (data) => {
+    meetUrlIn.value = data.meetingUrl || "";
   });
 
-  // Save on any change (optional but handy)
-  baseUrlIn.addEventListener("change", () => {
-    chrome.storage.sync.set({ baseUrl: baseUrlIn.value.trim() });
-  });
+  // Save meeting URL when changed
   meetUrlIn.addEventListener("change", () => {
     chrome.storage.sync.set({ meetingUrl: meetUrlIn.value.trim() });
   });
 
   // ---------- Helper ----------
-  const getConfig = () => ({
-    baseUrl:   baseUrlIn.value.trim() || DEFAULT_BASE_URL,
-    meetingUrl: meetUrlIn.value.trim() ,
-  });
+  const getMeetingUrl = () => meetUrlIn.value.trim();
 
   // ---------- Start button ----------
   startBtn.addEventListener("click", async () => {
-    const { baseUrl, meetingUrl } = getConfig();
+    const meetingUrl = getMeetingUrl();
+
+    if (!meetingUrl) {
+      statusEl.textContent = "Error: Please enter a meeting URL.";
+      return;
+    }
+
     statusEl.textContent = "Starting bot…";
 
     try {
-      const response = await fetch(`${baseUrl}/meeting_recorder_stormee/signin`, {
+      const response = await fetch(`${BASE_URL}/meeting_recorder_stormee/signin`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // If your backend still expects an API key, put it in storage or a separate field
-          // "x-api-key": API_KEY,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ meetingUrl }),
       });
 
       const data = await response.json();
+
       if (response.ok && data.status === "success") {
         statusEl.textContent = "Bot started successfully!";
       } else {
@@ -60,20 +54,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ---------- Stop button ----------
   stopBtn.addEventListener("click", async () => {
-    const { baseUrl } = getConfig();
     statusEl.textContent = "Stopping bot…";
 
     try {
-      const response = await fetch(`${baseUrl}/meeting_recorder_stormee/exit`, {
+      const response = await fetch(`${BASE_URL}/meeting_recorder_stormee/exit`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // If your backend still expects an API key, put it in storage or a separate field
-          // "x-api-key": API_KEY,
-        },
+        headers: { "Content-Type": "application/json" },
       });
 
       const data = await response.json();
+
       if (response.ok && data.status === "success") {
         statusEl.textContent = "Bot stopped successfully!";
       } else {
