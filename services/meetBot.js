@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 import { io } from "socket.io-client"; // Import socket.io-client
 import { promisify } from "util";
 import { exec } from "child_process";
+import { createProject ,uploadFile} from "./integrations/externalAPIS.js";
 
 const execAsync = promisify(exec);
 
@@ -21,6 +22,7 @@ let chatSegments = [];
 let chatScrapingActive = true;
 let participantCount=0;
 let participantMonitorInterval = null; // To store the interval for participant 
+let projectId=null;
 
 async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log("🔐 Ensuring authentication session...");
@@ -241,8 +243,27 @@ async function joinMeeting(meetingUrl, asGuest = false) {
   } else {
     console.log("✅ Mic already off.");
   }
-  startChatScraping();
-  console.log("🎥 Joined meeting with mic OFF by default.");
+  if (currentMeetingId && audioChunks[currentMeetingId]) {
+    console.log("ℹ️ Audio recording already in progress for meeting:", currentMeetingId);
+  } else {
+    const meetingId = currentMeetingId || `meeting-${Date.now()}`;
+    console.log(`🚀 Triggering audio recording for meeting: ${meetingId}`);
+    try {
+      const creatingProjectResponse=await createProject({user:"deepansh.gupta@techolution.com",description:"",user_name:"Deepansh Gupta",name:meetingId});
+      if(creatingProjectResponse.project_id){
+        projectId=creatingProjectResponse.project_id;
+        console.log("Successfully created the project folder");
+
+        await startAudioRecording(meetingId);
+      }
+      else{
+        console.log("failed to intitiate the folder creation");
+      }
+    } catch (error) {
+      console.error("❌ Error starting audio recording from chat command:", error);
+    }
+  }
+  console.log("🎥 started the audio recording ");
   if(page){
 
   
@@ -458,14 +479,59 @@ async function saveAudio(meetingId) {
     await execAsync(`ffmpeg -i ${webmPath} -acodec pcm_s16le -ar 48000 -ac 2 ${wavPath}`);
     console.log(`✅ Converted to WAV: ${wavPath}`);
     fs.unlinkSync(webmPath);
+    return wavPath;
   } catch (error) {
-    console.error(`❌ Error converting WebM to WAV: ${error.message}`);
+    console.error(`❌ Error converting or uploading WAV: ${error}`);
     console.log(`ℹ️ You can manually convert ${webmPath} to WAV using ffmpeg.`);
+    try { fs.unlinkSync(webmPath); } catch {}
+    return null;
   }
 
   delete audioChunks[meetingId];
 }
+async function uploadAudioFile(meetingId, wavPath) {
+  if (!wavPath || !fs.existsSync(wavPath)) {
+    console.error(`WAV file not found for upload: ${wavPath}`);
+    return false;
+  }
 
+  console.log(`Uploading WAV for meeting ${meetingId}...`);
+
+  const maxRetries = 3;
+  let uploaded = false;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const uploadResponse= await uploadFile({
+        projectID: projectId,
+        files: wavPath, // assuming uploadFile accepts path
+      });
+
+      console.log(`Uploaded WAV: ${wavPath}`);
+      uploaded = true;
+      break;
+    } catch (err) {
+      console.error(`Upload attempt ${i + 1} failed:`, err.message);
+      if (i === maxRetries - 1) {
+        console.error(`Final upload failed for ${meetingId}`);
+      } else {
+        await new Promise(r => setTimeout(r, 2000 * (i + 1))); // exponential backoff
+      }
+    }
+  }
+
+  // Optional: delete WAV after successful upload
+  if (uploaded) {
+    try {
+      fs.unlinkSync(wavPath);
+      console.log(`Cleaned up local WAV: ${wavPath}`);
+    } catch (err) {
+      console.warn(`Failed to delete WAV: ${wavPath}`, err);
+    }
+  }
+
+  return uploaded;
+}
 async function stopAudioRecording() {
   if (!page) {
     console.error("❌ No meeting page available. Cannot stop recording.");
@@ -482,7 +548,12 @@ async function stopAudioRecording() {
   });
 
   if (currentMeetingId) {
-    await saveAudio(currentMeetingId);
+    const wavPath=await saveAudio(currentMeetingId);
+    if (wavPath && projectId) {
+      await uploadAudioFile(currentMeetingId, wavPath);
+  
+      
+    }
     currentMeetingId = null;
   }
 
@@ -730,7 +801,10 @@ async function leaveMeeting() {
   try {
     // Stop all active processes
     await stopChatScraping();
-    await stopAudioRecording();
+    // Ensure upload happens even if recording stopped early
+  if (currentMeetingId && audioChunks[currentMeetingId]?.length > 0) {
+    await stopAudioRecording(); // This will save + upload
+  }
     await stopCaptions();
     stopParticipantMonitoring();
 
