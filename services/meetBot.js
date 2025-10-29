@@ -891,5 +891,6 @@ export {
   stopAudioRecording,
   isMicOn,
   startChatScraping,
-  stopChatScraping
+  stopChatScraping,
+  leaveMeeting
 };
