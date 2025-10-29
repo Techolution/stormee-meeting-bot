@@ -1,25 +1,49 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // Get references to DOM elements
-  const startBtn = document.getElementById("start-btn");
-  const stopBtn = document.getElementById("stop-btn");
-  const statusEl = document.getElementById("status");
+  // ---------- DOM references ----------
+  const startBtn   = document.getElementById("start-btn");
+  const stopBtn    = document.getElementById("stop-btn");
+  const statusEl   = document.getElementById("status");
+  const baseUrlIn  = document.getElementById("baseUrl");
+  const meetUrlIn  = document.getElementById("meetingUrl");
 
-  // Configuration constants
-  const BASE_URL = "http://localhost:5000";
-  const API_KEY = "YOUR_SECRET_API_KEY"; // This should be securely managed
-  const MEETING_URL = "https://meet.google.com/abc-defg-hij"; // Hardcoded meeting URL
+  // ---------- Default values ----------
+  const DEFAULT_BASE_URL   = "http://dev.appmod.ai";
 
-  // Start button click event listener
+
+  // ---------- Load persisted values ----------
+  chrome.storage.sync.get(["baseUrl", "meetingUrl"], (data) => {
+    baseUrlIn.value  = data.baseUrl  || DEFAULT_BASE_URL;
+    meetUrlIn.value  = data.meetingUrl ;
+  });
+
+  // Save on any change (optional but handy)
+  baseUrlIn.addEventListener("change", () => {
+    chrome.storage.sync.set({ baseUrl: baseUrlIn.value.trim() });
+  });
+  meetUrlIn.addEventListener("change", () => {
+    chrome.storage.sync.set({ meetingUrl: meetUrlIn.value.trim() });
+  });
+
+  // ---------- Helper ----------
+  const getConfig = () => ({
+    baseUrl:   baseUrlIn.value.trim() || DEFAULT_BASE_URL,
+    meetingUrl: meetUrlIn.value.trim() ,
+  });
+
+  // ---------- Start button ----------
   startBtn.addEventListener("click", async () => {
-    statusEl.textContent = "Starting bot...";
+    const { baseUrl, meetingUrl } = getConfig();
+    statusEl.textContent = "Starting bot…";
+
     try {
-      const response = await fetch(`${BASE_URL}/api/start-meeting`, {
+      const response = await fetch(`${baseUrl}/meeting_recorder_stormee/signin`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": API_KEY,
+          // If your backend still expects an API key, put it in storage or a separate field
+          // "x-api-key": API_KEY,
         },
-        body: JSON.stringify({ meetingUrl: MEETING_URL }),
+        body: JSON.stringify({ meetingUrl }),
       });
 
       const data = await response.json();
@@ -28,20 +52,24 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         statusEl.textContent = `Error: ${data.message || "Failed to start"}`;
       }
-    } catch (error) {
+    } catch (err) {
       statusEl.textContent = "Error: Could not connect to server.";
-      console.error("Start error:", error);
+      console.error("Start error:", err);
     }
   });
 
-  // Stop button click event listener
+  // ---------- Stop button ----------
   stopBtn.addEventListener("click", async () => {
-    statusEl.textContent = "Stopping bot...";
+    const { baseUrl } = getConfig();
+    statusEl.textContent = "Stopping bot…";
+
     try {
-      const response = await fetch(`${BASE_URL}/api/stop-meeting`, {
+      const response = await fetch(`${baseUrl}/meeting_recorder_stormee/exit`, {
         method: "POST",
         headers: {
-          "x-api-key": API_KEY,
+          "Content-Type": "application/json",
+          // If your backend still expects an API key, put it in storage or a separate field
+          // "x-api-key": API_KEY,
         },
       });
 
@@ -51,9 +79,9 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         statusEl.textContent = `Error: ${data.message || "Failed to stop"}`;
       }
-    } catch (error) {
+    } catch (err) {
       statusEl.textContent = "Error: Could not connect to server.";
-      console.error("Stop error:", error);
+      console.error("Stop error:", err);
     }
   });
 });

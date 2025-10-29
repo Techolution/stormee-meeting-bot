@@ -2,19 +2,15 @@
   "manifest_version": 3,
   "name": "GMeet Bot Control",
   "version": "1.0",
-  "description": "Starts and stops the GMeet bot.",
+  "description": "Start / stop a Google-Meet bot from a popup",
   "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "images/icon16.png",
-      "48": "images/icon48.png",
-      "128": "images/icon128.png"
-    }
+    "default_popup": "popup.html"
+    
   },
-  "host_permissions": ["http://localhost:5000/*"],
-  "icons": {
-    "16": "images/icon16.png",
-    "48": "images/icon48.png",
-    "128": "images/icon128.png"
-  }
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "*://localhost:8080/*"
+  ]
 }
