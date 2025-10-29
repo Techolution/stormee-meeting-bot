@@ -8,6 +8,7 @@ import {
     stopAudioRecording,
     stopChatScraping,
     startChatScraping,
+    leaveMeeting,
   } from "../services/meetBot.js";
   
   let currentMeetingUrl = null;
@@ -134,7 +135,20 @@ import {
         res.status(500).json({error:"Failed to stop chat scraping"});
     }
   }
+const exitMeeting=async(req,res)=>{
+  try{
+    await leaveMeeting();
+    res.json({
+      message:"Left the meeting successfully"
+    });
+  }
+  catch(err){
+    console.error("Error leaving the meeting:",err);
+    res.status(500).json({error:"Failed to leave the meeting"});
+  }
+
   
+}  
   export {
     startCaptionsController,
     stopCaptionsController,
