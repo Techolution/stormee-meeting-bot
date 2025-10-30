@@ -509,18 +509,29 @@ async function uploadAudioFile(meetingId, wavPath) {
       });
 
       console.log(`Uploaded WAV: ${wavPath}`);
+      uploaded = true;
+      try{
       if(uploadResponse){
         const artifact= await generateMeetingModeArtifact({
           audioName:`meeting-${meetingId}.wav`,
           projectId:projectId,
-          displayName:"test_audio",
+          displayName:`Meeting Artifact - ${meetingId}`,
           userEmail:process.env.USER_EMAIL,
           userName:process.env.USER_NAME,
         })
-        console.log('artifact',artifact);
-        // await createArtifactAndSendEmail(artifact)
+        try{
+          console.log('artifact',artifact);
+          await createArtifactAndSendEmail(artifact,projectId);
+
+        }
+        catch(err){
+          console.log("Failed to send mail after generating artifact",err);
+        }
       }
-      uploaded = true;
+      }
+      catch(err){
+        console.log("Failed to create meeting highlight and send them through email",err);
+      }
       break;
     } catch (err) {
       console.error(`Upload attempt ${i + 1} failed:`, err.message);

@@ -1,6 +1,5 @@
 import axios from "axios";
 import fs from "fs";
-import path from "path";
 import FormData from 'form-data';
 const uploadFile = async ({ projectID, files }) => {
     const uploadAPIURL = `${process.env.CW_BACKEND_URL}/gcs/upload-files/`;
@@ -69,7 +68,7 @@ const createProject = async ({ user, name, description, user_name }) => {
   };
 
   async function generateMeetingModeArtifact({projectId,userEmail,userName,modelType,LLM,audioName,displayName}) {
-    const url = `${process.env.CW_BACKEND_URL}/meeting_mode_artifact/gen_mm_artifact`;
+    const url = `${process.env.APPMOD_BACKEND_URL}/meeting_mode_artifact/gen_mm_artifact`;
   
     const payload = {
       audio_name: audioName,
@@ -88,13 +87,11 @@ const createProject = async ({ user, name, description, user_name }) => {
           'Content-Type': 'application/json'
         },
       });
-      console.log("meeting highlights",response);
       if (response.status!==200) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
   
       const data = await response.data;
-      console.log('Success:', data);
       return data;
   
     } catch (error) {
@@ -102,7 +99,6 @@ const createProject = async ({ user, name, description, user_name }) => {
       throw error;
     }
   }
-  import axios from "axios";
 
 const sendEmail = async ({
   to_email,

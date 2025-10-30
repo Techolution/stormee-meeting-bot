@@ -1,5 +1,78 @@
-const createArtifactAndSendEmail=(artifact)=>{
+import { sendEmail } from "../integrations/externalAPIS.js";
+import generateMeetingMinutesEmailInMOMScreen from "../sendEmail.js";
 
+function processMeetingData(topicsData) {
+    const meetingData = { ...topicsData }; // shallow clone to avoid direct mutation
+  
+    const minuteObjects =
+      meetingData?.diarization_json?.transcription?.unique_mom?.[0]?.minute_objects;
+  
+    if (Array.isArray(minuteObjects)) {
+      const sortedObjects = minuteObjects
+        .map((item) => ({ ...item })) // clone items to avoid side effects
+        .sort((a, b) => {
+          if (b.importance_score !== a.importance_score) {
+            return b.importance_score - a.importance_score;
+          }
+          return b.relevancy_score - a.relevancy_score;
+        });
+  
+      // store the sorted result back into the meetingData object
+      meetingData.diarization_json.transcription.unique_mom[0].minute_objects =
+        sortedObjects;
+    }
+  
+    return meetingData;
+  }
+  
+const createArtifactAndSendEmail = async (artifactData,projectId) => {
+    const tasklist=artifactData.artifact_upload_result.artifact_data.artifactData.itemListJson;
+    console.log("tasklist",tasklist);
+    if(!tasklist)return;
+    const tasks=tasklist.formatted_action_items;
+    const description= tasklist.audioDescription;
+    const audioFileName=tasklist.audio_filename;
+    const meetingData=processMeetingData(tasklist);
+    console.log("tasks:", tasks);
+    console.log("description:", description);
+    console.log("audioFileName:", audioFileName);
+    console.log("meetingData:", meetingData);
+    if(description&&audioFileName&&tasks.lenght>0&&meetingData){
+    const emailBody=generateMeetingMinutesEmailInMOMScreen({meetingData:meetingData,tasks:tasks, momArtifactId:artifactData.artifact_id,audioAnalysisDescription:description,audio_filename:audioFileName,selectedProjectId:projectId,backlogLink:""});
+    if(emailBody){
+        try{
+    const response=await sendEmail({to_email:process.env.USER_EMAIL,subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
     
+    console.log("response from email",response);
+    }
+    catch(error){
+        console.error("error in sending email",error);
+    }}
 }
-export { createArtifactAndSendEmail};
+}
+ const parseAudioContent = (audioDescription) => {
+    const descriptionMatch = audioDescription.match(/<DESCRIPTION>([\s\S]*?)<\/DESCRIPTION>/);
+    const description = descriptionMatch ? descriptionMatch[1].trim() : "";
+    
+    const keyTakeawaysMatch = audioDescription.match(/<KEYTAKEAWAYS>([\s\S]*?)<\/KEYTAKEAWAYS>/);
+    const keyTakeawaysText = keyTakeawaysMatch ? keyTakeawaysMatch[1].trim() : "";
+  
+    const keyTakeaways=[]
+    const lines = keyTakeawaysText.split('\n');
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line && /^\d+\./.test(line)) {
+        // Extract the content (everything after the number and period)
+        const content = line.replace(/^\d+\.\s+/, '').trim();
+        if (content) {
+          keyTakeaways.push({
+            id: keyTakeaways.length,
+            content
+          });
+        }
+      }
+    }
+    return { description, keyTakeaways };
+  };
+export { createArtifactAndSendEmail,parseAudioContent};
