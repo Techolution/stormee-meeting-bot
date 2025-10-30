@@ -108,7 +108,7 @@ const sendEmail = async ({
 }) => {
   try {
     const response = await axios.post(
-      `${process.env.CW_BACKEND_URL}/utility/cw-email`,
+      `${process.env.APPMOD_BACKEND_URL}/utility/cw-email`,
       {
         to_email,
         subject,
