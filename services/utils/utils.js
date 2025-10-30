@@ -26,13 +26,13 @@ function processMeetingData(topicsData) {
   }
   
 const createArtifactAndSendEmail = async (artifactData,projectId) => {
-    const tasklist=artifactData.artifact_upload_result.artifact_data.artifactData.itemListJson;
-    console.log("tasklist",tasklist);
-    if(!tasklist)return;
-    const tasks=tasklist.formatted_action_items;
-    const description= tasklist.audioDescription;
-    const audioFileName=tasklist.audio_filename;
-    const meetingData=processMeetingData(tasklist);
+    const artifactJson=artifactData.artifact_upload_result.artifact_data.artifactData;
+    console.log("artifactJson",artifactJson);
+    if(!artifactJson)return;
+    const tasks=artifactJson.itemListJson.formatted_action_items;
+    const description= artifactJson.transcriptJson.diarization_json.audioDescription;
+    const audioFileName=artifactJson.transcriptJson.diarization_json.audio_filename;
+    const meetingData=processMeetingData(artifactJson);
     console.log("tasks:", tasks);
     console.log("description:", description);
     console.log("audioFileName:", audioFileName);
