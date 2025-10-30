@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import FormData from 'form-data';
 const uploadFile = async ({ projectID, files }) => {
-    const uploadAPIURL = "https://dev-creative-workspace.techo.camp/backend/gcs/upload-files/";
+    const uploadAPIURL = `${process.env.CW_BACKEND_URL}/gcs/upload-files/`;
   
     try {
       const formData = new FormData();
@@ -40,7 +40,7 @@ const uploadFile = async ({ projectID, files }) => {
   };
 
 const createProject = async ({ user, name, description, user_name }) => {
-    const apiURL = "https://dev-creative-workspace.techo.camp/backend/projects";
+    const apiURL = `${process.env.CW_BACKEND_URL}/projects`;
   
     try {
       const response = await axios.post(
@@ -67,4 +67,76 @@ const createProject = async ({ user, name, description, user_name }) => {
       throw error;
     }
   };
-  export { uploadFile, createProject };
+
+  async function generateMeetingModeArtifact({projectId,userEmail,userName,modelType,LLM,audioName,displayName}) {
+    const url = `${process.env.CW_BACKEND_URL}/meeting_mode_artifact/gen_mm_artifact`;
+  
+    const payload = {
+      audio_name: audioName,
+      project_id: projectId,
+      display_name: displayName,
+      user_email: userEmail,
+      user_name: userName,
+      model_type: "google",
+      large_language_model: "claude-3.5-sonnet"
+    };
+  
+    try {
+      const response = await axios.post(url, payload, {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+      });
+      console.log("meeting highlights",response);
+      if (response.status!==200) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+  
+      const data = await response.data;
+      console.log('Success:', data);
+      return data;
+  
+    } catch (error) {
+      console.error('Error calling API:', error);
+      throw error;
+    }
+  }
+  import axios from "axios";
+
+const sendEmail = async ({
+  to_email,
+  subject,
+  body,
+  cc,
+}) => {
+  try {
+    const response = await axios.post(
+      `${process.env.CW_BACKEND_URL}/utility/cw-email`,
+      {
+        to_email,
+        subject,
+        body,
+        cc,
+      },
+      {
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("Email sent successfully:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("Error sending email:", error.response?.data || error.message);
+    throw error;
+  }
+};
+
+
+  
+  // Example usage:
+  // generateMeetingModeArtifact();
+  export { uploadFile, createProject,generateMeetingModeArtifact,sendEmail };

@@ -4,7 +4,8 @@ import { chromium } from "playwright";
 import { io } from "socket.io-client"; // Import socket.io-client
 import { promisify } from "util";
 import { exec } from "child_process";
-import { createProject ,uploadFile} from "./integrations/externalAPIS.js";
+import { createProject ,generateMeetingModeArtifact,uploadFile} from "./integrations/externalAPIS.js";
+import { createArtifactAndSendEmail } from "./utils/utils.js";
 
 const execAsync = promisify(exec);
 
@@ -508,6 +509,17 @@ async function uploadAudioFile(meetingId, wavPath) {
       });
 
       console.log(`Uploaded WAV: ${wavPath}`);
+      if(uploadResponse){
+        const artifact= await generateMeetingModeArtifact({
+          audioName:`meeting-${meetingId}.wav`,
+          projectId:projectId,
+          displayName:"test_audio",
+          userEmail:process.env.USER_EMAIL,
+          userName:process.env.USER_NAME,
+        })
+        console.log('artifact',artifact);
+        // await createArtifactAndSendEmail(artifact)
+      }
       uploaded = true;
       break;
     } catch (err) {
@@ -551,6 +563,7 @@ async function stopAudioRecording() {
     const wavPath=await saveAudio(currentMeetingId);
     if (wavPath && projectId) {
       await uploadAudioFile(currentMeetingId, wavPath);
+
   
       
     }
