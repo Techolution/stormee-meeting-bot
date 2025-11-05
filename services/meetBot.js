@@ -30,7 +30,7 @@ async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log("🔐 Ensuring authentication session...");
 
   browser = await chromium.launch({
-    headless: true,
+    headless: false,
     args: [
       "--disable-blink-features=AutomationControlled",
       "--start-maximized",
@@ -686,13 +686,13 @@ async function startChatScraping() {
               }
             }
           }
-          else if (messageText.toLowerCase().startsWith("stormee add")) {
+          else if (messageText.toLowerCase().startsWith("stormee add email")) {
             if (!currentMeetingId) {
               console.log("ℹ️ No active meeting found for adding recipient");
               return;
             }
             try {
-              const email = messageText.split("stormee add")[1].trim();
+              const email = messageText.split("stormee add email")[1].trim();
               if (!email || !email.includes("@")) {
                 console.log("❌ Invalid email format provided");
                 return;
