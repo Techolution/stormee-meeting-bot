@@ -250,7 +250,9 @@ async function joinMeeting(meetingUrl, asGuest = false) {
     const meetingId = currentMeetingId || `meeting-${Date.now()}`;
     console.log(`🚀 Triggering audio recording for meeting: ${meetingId}`);
     try {
-      const creatingProjectResponse=await createProject({user:process.env.USER_EMAIL,description:"",user_name:process.env.USER_NAME,name:meetingId});
+      const creatingProjectResponse=await createProject({
+        user:"shaik.sultana@techolution.com",description:"",
+        user_name:"Shaik Sumaiya",name:meetingId});
       if(creatingProjectResponse.project_id){
         projectId=creatingProjectResponse.project_id;
         console.log("Successfully created the project folder");
@@ -516,8 +518,8 @@ async function uploadAudioFile(meetingId, wavPath) {
           audioName:`${meetingId}.wav`,
           projectId:projectId,
           displayName:`Meeting Artifact - ${meetingId}`,
-          userEmail:process.env.USER_EMAIL,
-          userName:process.env.USER_NAME,
+          userEmail:"shaik.sultana@techolution.com",
+          userName:"Shaik Sumaiya",
         })
         try{
           console.log('artifact',artifact);

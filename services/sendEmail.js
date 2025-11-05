@@ -196,7 +196,7 @@ export async function generateMeetingMinutesEmailInMOMScreen(
 ) {
   
 
-  const emailLinkUrl = `${process.env.TASK_SCREEN_URL}/artifact/${momArtifactId}/mode/Meeting Mode`;
+  const emailLinkUrl = `https://dev.appmod.ai/artifact/${momArtifactId}/mode/Meeting Mode`;
   console.log("props in generateMeetingMinutesEmailInMOMScreen",meetingData,tasks,audioAnalysisDescription,audio_filename,emailLinkUrl,preciseEmail);
 try{
   const htmlString = await MeetingMinutesEmail({
