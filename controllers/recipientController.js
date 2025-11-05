@@ -4,40 +4,32 @@ import {
   getRecipients
 } from "../services/meetBot.js";
 
-// GET /meet/:meetId/recipients
+// GET /recipient
 export const getRecipientsController = (req, res) => {
   try {
-    const { meetId } = req.params;
-    if (!meetId) {
-      return res.status(400).json({ error: "meetId is required in params" });
-    }
+    const recipients = getRecipients(); // Fetch all recipients of the current meeting
 
-    const recipients = getRecipients(meetId);
-
-    res.status(200).json({ meetId, recipients });
+    res.status(200).json({ recipients });
   } catch (error) {
     console.error("Error in getRecipientsController:", error);
     res.status(500).json({ error: "Failed to fetch recipients" });
   }
 };
 
-// POST /meet/:meetId/recipient
+// POST /recipient
 export const addRecipientController = (req, res) => {
   try {
-    const { meetId } = req.params;
     const { email } = req.body;
 
-    if (!meetId || !email) {
-      console.log(req.params);
-      console.log("meetId or email missing", meetId, email);
+    if (!email) {
+      console.log("email missing", meetId, email);
       return res.status(400).json({ error: "meetId and email are required" });
     }
 
-    const updatedRecipients = addRecipient(meetId, email);
+    const updatedRecipients = addRecipient(email);
 
     res.status(201).json({
       message: "Recipient added successfully",
-      meetId,
       recipients: updatedRecipients,
     });
   } catch (error) {
@@ -46,21 +38,18 @@ export const addRecipientController = (req, res) => {
   }
 };
 
-// DELETE /meet/:meetId/recipients
+// DELETE /recipient
 export const removeRecipientController = (req, res) => {
   try {
-    const { meetId } = req.params;
     const { email } = req.body;
 
-    if (!meetId || !email) {
-      return res.status(400).json({ error: "meetId (param) and email (body) are required" });
+    if (!email) {
+      return res.status(400).json({ error: "email (body) is required" });
     }
 
-    const updatedRecipients = removeRecipient(meetId, email);
-    
+    const updatedRecipients = removeRecipient(email);
+
     res.status(200).json({
-      message: "Recipient removed successfully",
-      meetId,
       recipients: updatedRecipients,
     });
   } catch (error) {
