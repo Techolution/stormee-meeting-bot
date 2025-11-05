@@ -48,7 +48,7 @@ const createArtifactAndSendEmail = async (artifactData,projectId) => {
           console.log("emailBOdy",emailBody)
     if(emailBody){
         try{
-    const response=await sendEmail({to_email:process.env.USER_EMAIL,subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
+    const response=await sendEmail({to_email:"shaik.sultana@techolution.com",subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
     
     console.log("response from email",response);
     }
