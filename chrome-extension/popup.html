@@ -28,6 +28,34 @@
         margin-top: 8px;
         font-size: 0.9em;
       }
+      .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.5);
+      }
+      .modal-content {
+        background-color: white;
+        margin: 15% auto;
+        padding: 20px;
+        width: 80%;
+        border-radius: 5px;
+      }
+      .modal-buttons {
+        margin-top: 15px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .modal-buttons button {
+        width: 45%;
+      }
+      .divider {
+        border-top: 1px solid #ccc;
+        margin: 15px 0;
+      }
     </style>
   </head>
   <body>
@@ -46,6 +74,28 @@
     </div>
 
     <p id="status"></p>
+
+    <div class="divider"></div>
+
+    <label for="recipientEmail">Add Email Summary Recipient</label>
+    <input
+      id="recipientEmail"
+      type="email"
+      placeholder="Enter email address"
+    />
+    <button id="add-recipient-btn">Add Recipient</button>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmModal" class="modal">
+      <div class="modal-content">
+        <h4>Confirm Recipient</h4>
+        <p>Are you sure you want to add <span id="confirmEmail"></span> as recipient?</p>
+        <div class="modal-buttons">
+          <button id="confirmYes">Yes</button>
+          <button id="confirmNo">No</button>
+        </div>
+      </div>
+    </div>
 
     <script src="popup.js"></script>
   </body>
