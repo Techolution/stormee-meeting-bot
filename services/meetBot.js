@@ -30,7 +30,7 @@ async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log("🔐 Ensuring authentication session...");
 
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: [
       "--disable-blink-features=AutomationControlled",
       "--start-maximized",
