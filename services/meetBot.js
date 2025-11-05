@@ -30,7 +30,7 @@ async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log("🔐 Ensuring authentication session...");
 
   browser = await chromium.launch({
-    headless: true,
+    headless: false,
     args: [
       "--disable-blink-features=AutomationControlled",
       "--start-maximized",
@@ -697,7 +697,7 @@ async function startChatScraping() {
                 console.log("❌ Invalid email format provided");
                 return;
               }
-              addRecipient(currentMeetingId, email);
+              addRecipient(email);
               console.log(`✅ Added recipient ${email} to meeting ${currentMeetingId}`);
             } catch(err) {
               console.error("❌ Error adding recipient from chat command:", err);
@@ -929,7 +929,7 @@ function stopParticipantMonitoring() {
   }
 }
 
-function addRecipient(meetingId, email) {
+function addRecipient(email) {
 
   if (!recipients[currentMeetingId]) {
     recipients[currentMeetingId] = new Set();
@@ -941,7 +941,7 @@ function addRecipient(meetingId, email) {
   return Array.from(recipients[currentMeetingId]);
 }
 
-function removeRecipient(meetingId, email) {
+function removeRecipient(email) {
 
   if (recipients[currentMeetingId]) {
     recipients[currentMeetingId].delete(email);
@@ -952,7 +952,7 @@ function removeRecipient(meetingId, email) {
   return Array.from(recipients[currentMeetingId] || []);
 }
 
-function getRecipients(meetingId) {
+function getRecipients() {
   const users =  Array.from(recipients[currentMeetingId] || []);
 
   console.log(`Recipients for meeting ${currentMeetingId}:`, users);
