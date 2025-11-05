@@ -22,8 +22,8 @@ export const addRecipientController = (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-      console.log("email missing", meetId, email);
-      return res.status(400).json({ error: "meetId and email are required" });
+      console.log("email missing", email);
+      return res.status(400).json({ error: "email is required" });
     }
 
     const updatedRecipients = addRecipient(email);
