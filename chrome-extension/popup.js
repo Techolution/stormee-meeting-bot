@@ -76,7 +76,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const data = await response.json();
 
-      if (response.status == 200) {
+      if (response.status == 201) {
         statusEl.textContent = "Bot stopped successfully!";
       } else {
         statusEl.textContent = `Error: ${data.message || "Failed to stop"}`;
@@ -110,7 +110,7 @@ document.addEventListener("DOMContentLoaded", () => {
     
     try {
       const response = await fetch(
-        `${BASE_URL}/meeting_recorder_stormee/recipient`,
+        `${BASE_URL}/meeting_recorder_stormee/recipient/add`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -120,7 +120,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const data = await response.json();
 
-      if (response.status === 200) {
+      if (response.status === 201) {
         statusEl.textContent = "Recipient added successfully!";
         recipientEmailIn.value = ""; // Clear the input
       } else {
