@@ -120,7 +120,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const data = await response.json();
 
-      if (response.status === 201) {
+      if (response.status === 200) {
         statusEl.textContent = "Recipient added successfully!";
         recipientEmailIn.value = ""; // Clear the input
       } else {
