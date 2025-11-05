@@ -27,9 +27,9 @@ const checkingHealth = (req, res) => {
 };
 
 // Recipient routes
-router.get("/recipient", getRecipientsController);
-router.post("/recipient", addRecipientController);
-router.delete("/recipient", removeRecipientController);
+router.get("/recipient/fetch", getRecipientsController);
+router.post("/recipient/add", addRecipientController);
+router.delete("/recipient/remove", removeRecipientController);
 
 // Existing API routes for Google Meet functionality
 router.post("/start", startCaptionsController);
