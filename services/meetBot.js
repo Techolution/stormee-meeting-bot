@@ -24,6 +24,7 @@ let chatScrapingActive = true;
 let participantCount=0;
 let participantMonitorInterval = null; // To store the interval for participant 
 let projectId=null;
+let recipients={}; // To store recipients per meetingId: {meetingId: Set<emails>}
 
 async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log("🔐 Ensuring authentication session...");
@@ -256,6 +257,8 @@ async function joinMeeting(meetingUrl, asGuest = false) {
         console.log("Successfully created the project folder");
 
         await startAudioRecording(meetingId);
+
+        await startChatScraping(); // start chat scraping on joining
       }
       else{
         console.log("failed to intitiate the folder creation");
@@ -513,16 +516,21 @@ async function uploadAudioFile(meetingId, wavPath) {
       try{
       if(uploadResponse){
         const artifact= await generateMeetingModeArtifact({
-          audioName:`meeting-${meetingId}.wav`,
+          // audioName:`meeting-${meetingId}.wav`, // suspected error
+          audioName: wavPath,
           projectId:projectId,
           displayName:`Meeting Artifact - ${meetingId}`,
           userEmail:process.env.USER_EMAIL,
           userName:process.env.USER_NAME,
         })
         try{
-          console.log('artifact',artifact);
-          await createArtifactAndSendEmail(artifact,projectId);
+          const artifactData = artifact?.artifact_upload_result?.artifact_data?.artifactData;
 
+          console.log('artifact', artifact);
+          // console.log(artifact?.artifact_upload_result);
+          console.log('ARTIFACT DATA\n', artifactData);
+
+          await createArtifactAndSendEmail(artifact, projectId, getRecipients(meetingId));
         }
         catch(err){
           console.log("Failed to send mail after generating artifact",err);
@@ -677,6 +685,23 @@ async function startChatScraping() {
               catch(err){
                 console.error("❌ Error stopping audio recording from chat command:", err);
               }
+            }
+          }
+          else if (messageText.toLowerCase().startsWith("stormee add")) {
+            if (!currentMeetingId) {
+              console.log("ℹ️ No active meeting found for adding recipient");
+              return;
+            }
+            try {
+              const email = messageText.split("stormee add")[1].trim();
+              if (!email || !email.includes("@")) {
+                console.log("❌ Invalid email format provided");
+                return;
+              }
+              addRecipient(currentMeetingId, email);
+              console.log(`✅ Added recipient ${email} to meeting ${currentMeetingId}`);
+            } catch(err) {
+              console.error("❌ Error adding recipient from chat command:", err);
             }
           }
         });
@@ -905,6 +930,37 @@ function stopParticipantMonitoring() {
   }
 }
 
+function addRecipient(meetingId, email) {
+
+  if (!recipients[currentMeetingId]) {
+    recipients[currentMeetingId] = new Set();
+  }
+
+  recipients[currentMeetingId].add(email);
+  console.log(`Added recipient ${email} to meeting ${currentMeetingId}`);
+
+  return Array.from(recipients[currentMeetingId]);
+}
+
+function removeRecipient(meetingId, email) {
+
+  if (recipients[currentMeetingId]) {
+    recipients[currentMeetingId].delete(email);
+
+    console.log(`Removed recipient ${email} from meeting ${currentMeetingId}`);
+  }
+
+  return Array.from(recipients[currentMeetingId] || []);
+}
+
+function getRecipients(meetingId) {
+  const users =  Array.from(recipients[currentMeetingId] || []);
+
+  console.log(`Recipients for meeting ${currentMeetingId}:`, users);
+
+  return users;
+}
+
 export {
   startCaptions,
   stopCaptions,
@@ -913,6 +969,9 @@ export {
   pauseAudio,
   startAudioRecording,
   stopAudioRecording,
+  addRecipient,
+  removeRecipient,
+  getRecipients,
   isMicOn,
   startChatScraping,
   stopChatScraping,
