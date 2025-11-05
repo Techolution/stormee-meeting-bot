@@ -25,31 +25,70 @@ function processMeetingData(topicsData) {
     return meetingData;
   }
   
-const createArtifactAndSendEmail = async (artifactData,projectId) => {
-    const tasklist=artifactData.artifact_upload_result.artifact_data.artifactData.itemListJson;
-    console.log("tasklist",tasklist);
-    if(!tasklist)return;
-    const tasks=tasklist.formatted_action_items;
-    const description= tasklist.audioDescription;
-    const audioFileName=tasklist.audio_filename;
-    const meetingData=processMeetingData(tasklist);
+  const createArtifactAndSendEmail = async (artifactData, projectId, recipients=[]) => {
+    const tasklist = artifactData.artifact_upload_result.artifact_data.artifactData.itemListJson;
+    console.log(artifactData.artifact_upload_result);
+    console.log("tasklist", tasklist);
+    if (!tasklist) return;
+
+    const tasks = tasklist.formatted_action_items;
+    const description = tasklist.audioDescription;
+    const audioFileName = tasklist.audio_filename;
+    const meetingData = processMeetingData(tasklist);
+    
     console.log("tasks:", tasks);
     console.log("description:", description);
     console.log("audioFileName:", audioFileName);
     console.log("meetingData:", meetingData);
-    if(description&&audioFileName&&tasks.lenght>0&&meetingData){
-    const emailBody=generateMeetingMinutesEmailInMOMScreen({meetingData:meetingData,tasks:tasks, momArtifactId:artifactData.artifact_id,audioAnalysisDescription:description,audio_filename:audioFileName,selectedProjectId:projectId,backlogLink:""});
-    if(emailBody){
-        try{
-    const response=await sendEmail({to_email:process.env.USER_EMAIL,subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
-    
-    console.log("response from email",response);
+
+    recipients.push(process.env.USER_EMAIL); // insert env user email
+
+    if (description && audioFileName && tasks.length > 0 && meetingData) {
+      const emailBody = generateMeetingMinutesEmailInMOMScreen({
+        meetingData: meetingData,
+        tasks: tasks,
+        momArtifactId: artifactData.artifact_id,
+        audioAnalysisDescription: description,
+        audio_filename: audioFileName,
+        selectedProjectId: projectId,
+        backlogLink: "",
+      });
+
+      if (emailBody) {
+        try {
+
+          const emailPromises = recipients.map((email) =>
+            sendEmail({
+              to_email: email,
+              subject: `Meeting Minutes for ${audioFileName}`,
+              body: emailBody
+            })
+          );
+
+          const responses = await Promise.allSettled(emailPromises);
+
+          responses.forEach((result, index) => {
+            if (result.status === "fulfilled") {
+              console.log(`Email sent successfully to ${recipients[index]}`);
+            } else {
+              console.error(`Failed to send email to ${recipients[index]}:`, result.reason);
+            }
+          });
+
+          // const response = await sendEmail({
+          //   to_email: process.env.USER_EMAIL,
+          //   subject: `Meeting Minutes for ${audioFileName}`,
+          //   body: emailBody
+          // });
+
+          // console.log("response from email", response);
+        } catch (error) {
+          console.error("error in sending email", error);
+        }
+      }
     }
-    catch(error){
-        console.error("error in sending email",error);
-    }}
-}
-}
+  }
+
  const parseAudioContent = (audioDescription) => {
     const descriptionMatch = audioDescription.match(/<DESCRIPTION>([\s\S]*?)<\/DESCRIPTION>/);
     const description = descriptionMatch ? descriptionMatch[1].trim() : "";
