@@ -5,7 +5,7 @@ import { parseAudioContent } from "./utils/utils.js";
 /**
  * Generates meeting minutes email HTML as a string (no React, no JSX)
  */
-function MeetingMinutesEmail({
+async function MeetingMinutesEmail({
   meetingData,
   tasks,
   taskScreenUrl,
@@ -14,7 +14,6 @@ function MeetingMinutesEmail({
   audio_filename,
   preciseEmail = false,
 }) {
-  console.log("[EMAIL] taskScreenUrl:", taskScreenUrl, momArtifactId);
 
   const actionItemsUrl = taskScreenUrl
     ? `${taskScreenUrl}?activeAccordion=actionItems`
@@ -22,8 +21,10 @@ function MeetingMinutesEmail({
   const meetingHighlightsUrl = taskScreenUrl
     ? `${taskScreenUrl}?activeAccordion=momItems`
     : "";
-
-  const formattedDescription = parseAudioContent(audioAnalysisDescription);
+  console.log('meeting Data',meetingData);
+  console.log("description before formatting:", audioAnalysisDescription);
+  const formattedDescription = await parseAudioContent({audioDescription:audioAnalysisDescription});
+  console.log("formattedDescription", formattedDescription);
 
   const hasMoreHighlights = !preciseEmail && meetingData?.length > 7;
   const hasMoreTakeaways =
@@ -33,12 +34,13 @@ function MeetingMinutesEmail({
   const displayedHighlights = preciseEmail
     ? meetingData
     : meetingData?.slice(0, 7);
+    console.log("displayedHighlights", displayedHighlights);
   const displayedTasks = preciseEmail ? tasks : tasks?.slice(0, 7);
 
-  console.log("formattedDescription", formattedDescription);
+  // console.log("formattedDescription", formattedDescription);
   const parsedDescription = marked.parse(formattedDescription.description);
-  console.log("parsedDescription", parsedDescription);
-  console.log("[EMAIL] taskScreenUrl new one:", taskScreenUrl);
+  // console.log("parsedDescription", parsedDescription);
+  // console.log("[EMAIL] taskScreenUrl new one:", taskScreenUrl);
 
   // === Build HTML using template literals ===
   const rawHtml = `
@@ -192,20 +194,12 @@ export async function generateMeetingMinutesEmailInMOMScreen(
   backlogLink,
   preciseEmail = false
 ) {
-  console.log(
-    "[EMAIL] data received:",
-    meetingData,
-    audioAnalysisDescription,
-    audio_filename,
-    "preciseEmail:",
-    preciseEmail
-  );
+  
 
   const emailLinkUrl = `${process.env.TASK_SCREEN_URL}/artifact/${momArtifactId}/mode/Meeting Mode`;
-
-  console.log("[EMAIL] emailLinkUrl:", emailLinkUrl);
-
-  const htmlString = MeetingMinutesEmail({
+  console.log("props in generateMeetingMinutesEmailInMOMScreen",meetingData,tasks,audioAnalysisDescription,audio_filename,emailLinkUrl,preciseEmail);
+try{
+  const htmlString = await MeetingMinutesEmail({
     meetingData,
     tasks,
     taskScreenUrl: emailLinkUrl,
@@ -214,8 +208,12 @@ export async function generateMeetingMinutesEmailInMOMScreen(
     audio_filename,
     preciseEmail,
   });
-
+  console.log("Generated email HTML string",htmlString);
   return htmlString;
+}catch(error){
+    console.error("Error generating email HTML:", error);
+    throw error;
+}
 }
 
 export default generateMeetingMinutesEmailInMOMScreen;

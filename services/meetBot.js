@@ -516,8 +516,7 @@ async function uploadAudioFile(meetingId, wavPath) {
       try{
       if(uploadResponse){
         const artifact= await generateMeetingModeArtifact({
-          // audioName:`meeting-${meetingId}.wav`, // suspected error
-          audioName: wavPath,
+          audioName:`${meetingId}.wav`,
           projectId:projectId,
           displayName:`Meeting Artifact - ${meetingId}`,
           userEmail:process.env.USER_EMAIL,
