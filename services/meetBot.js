@@ -24,6 +24,7 @@ let chatScrapingActive = true;
 let participantCount=0;
 let participantMonitorInterval = null; // To store the interval for participant 
 let projectId=null;
+let adminUser=null;
 
 async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log("🔐 Ensuring authentication session...");
@@ -178,9 +179,10 @@ async function performGoogleLogin() {
   }
 }
 
-async function joinMeeting(meetingUrl, asGuest = false) {
+async function joinMeeting(meetingUrl, adminuser,asGuest = false) {
   console.log("🚀 Joining meeting:", meetingUrl);
-
+  adminUser=adminuser;
+console.log("adminuser",adminUser);
   await ensureAuthSession(meetingUrl, asGuest);
 
   // Wait for the page to load
@@ -251,8 +253,10 @@ async function joinMeeting(meetingUrl, asGuest = false) {
     console.log(`🚀 Triggering audio recording for meeting: ${meetingId}`);
     try {
       const creatingProjectResponse=await createProject({
-        user:"shaik.sultana@techolution.com",description:"",
-        user_name:"Shaik Sumaiya",name:meetingId});
+        user:adminUser??process.env.USER_EMAIL,
+        description:"",
+        user_name:adminUser??process.env.USER_NAME
+        ,name:meetingId});
       if(creatingProjectResponse.project_id){
         projectId=creatingProjectResponse.project_id;
         console.log("Successfully created the project folder");
@@ -492,7 +496,7 @@ async function saveAudio(meetingId) {
 
   delete audioChunks[meetingId];
 }
-async function uploadAudioFile(meetingId, wavPath) {
+async function uploadAudioFile(meetingId, wavPath,adminUser) {
   if (!wavPath || !fs.existsSync(wavPath)) {
     console.error(`WAV file not found for upload: ${wavPath}`);
     return false;
@@ -518,12 +522,13 @@ async function uploadAudioFile(meetingId, wavPath) {
           audioName:`${meetingId}.wav`,
           projectId:projectId,
           displayName:`Meeting Artifact - ${meetingId}`,
-          userEmail:"shaik.sultana@techolution.com",
-          userName:"Shaik Sumaiya",
+          userEmail:adminUser??process.env.USER_EMAIL,
+          userName:adminUser??process.env.USER_NAME
         })
         try{
+          console.log("admin user is ",adminUser);
           console.log('artifact',artifact);
-          await createArtifactAndSendEmail(artifact,projectId);
+          await createArtifactAndSendEmail(artifact,projectId,adminUser);
 
         }
         catch(err){
@@ -575,7 +580,7 @@ async function stopAudioRecording() {
   if (currentMeetingId) {
     const wavPath=await saveAudio(currentMeetingId);
     if (wavPath && projectId) {
-      await uploadAudioFile(currentMeetingId, wavPath);
+      await uploadAudioFile(currentMeetingId, wavPath,adminUser);
 
   
       

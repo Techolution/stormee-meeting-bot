@@ -37,12 +37,12 @@ import {
   
   const loginController = async (req, res) => {
     try {
-      const { meetingUrl } = req.body;
+      const { meetingUrl,adminUser } = req.body;
       if (!meetingUrl)
         return res.status(400).json({ error: "meetingUrl is required" });
   
       currentMeetingUrl = meetingUrl;
-      joinMeeting(meetingUrl)
+      joinMeeting(meetingUrl,adminUser)
         .then(() => console.log("Joined meeting"))
         .catch((err) => console.error(err));
       res.json({ message: "Meeting joined" });

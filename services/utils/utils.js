@@ -22,7 +22,7 @@ function processMeetingData(topicsData) {
   
   }
   
-const createArtifactAndSendEmail = async (artifactData,projectId) => {
+const createArtifactAndSendEmail = async (artifactData,projectId,adminUser) => {
     const artifactJson=artifactData.artifact_upload_result.artifact_data.artifactData;
     // console.log("artifactJson",artifactJson);
     if(!artifactJson)return;
@@ -48,7 +48,8 @@ const createArtifactAndSendEmail = async (artifactData,projectId) => {
           console.log("emailBOdy",emailBody)
     if(emailBody){
         try{
-    const response=await sendEmail({to_email:"shaik.sultana@techolution.com",subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
+          console.log("sending email to",adminUser);
+    const response=await sendEmail({to_email:adminUser??process.env.USER_EMAIL,subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
     
     console.log("response from email",response);
     }
