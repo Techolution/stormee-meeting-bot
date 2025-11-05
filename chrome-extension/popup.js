@@ -4,6 +4,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const stopBtn = document.getElementById("stop-btn");
   const statusEl = document.getElementById("status");
   const meetUrlIn = document.getElementById("meetingUrl");
+  const adminUser=document.getElementById("admin");
 
   // ---------- FIXED BASE URL ----------
   const BASE_URL = "https://dev.appmod.ai"; // Fixed, no input, no storage
@@ -20,11 +21,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ---------- Helper ----------
   const getMeetingUrl = () => meetUrlIn.value.trim();
+  const getAdminUser=()=> adminUser.value.trim();
 
   // ---------- Start button ----------
   startBtn.addEventListener("click", async () => {
     const meetingUrl = getMeetingUrl();
-
+    const adminUser=getAdminUser();
     if (!meetingUrl) {
       statusEl.textContent = "Error: Please enter a meeting URL.";
       return;
@@ -33,12 +35,13 @@ document.addEventListener("DOMContentLoaded", () => {
     statusEl.textContent = "Starting bot…";
 
     try {
+      
       const response = await fetch(
         `${BASE_URL}/meeting_recorder_stormee/signin`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ meetingUrl }),
+          body: JSON.stringify({ meetingUrl: meetingUrl,adminUser:adminUser }),
         }
       );
 
