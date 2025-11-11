@@ -19,10 +19,9 @@ function processMeetingData(topicsData) {
       // store the sorted result back into the meetingData object
      return sortedObjects;
     }
-  
   }
   
-const createArtifactAndSendEmail = async (artifactData,projectId,adminUser) => {
+  const createArtifactAndSendEmail = async (artifactData,projectId, recipients=[]) => {
     const artifactJson=artifactData.artifact_upload_result.artifact_data.artifactData;
     // console.log("artifactJson",artifactJson);
     if(!artifactJson)return;
@@ -45,13 +44,29 @@ const createArtifactAndSendEmail = async (artifactData,projectId,adminUser) => {
         projectId,
         ""
       );
-          console.log("emailBOdy",emailBody)
-    if(emailBody){
+      console.log("emailBOdy",emailBody)
+      if(emailBody){
         try{
-          console.log("sending email to",adminUser);
-    const response=await sendEmail({to_email:adminUser??process.env.USER_EMAIL,subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
+        const emailPromises = recipients.map((email) =>
+            sendEmail({
+              to_email: email,
+              subject: `Meeting Minutes for ${audioFileName}`,
+              body: emailBody
+            })
+          );
+
+          const responses = await Promise.allSettled(emailPromises);
+
+          responses.forEach((result, index) => {
+            if (result.status === "fulfilled") {
+              console.log(`Email sent successfully to recipient #${index + 1}`);
+            } else {
+              console.error(`Failed to send email to recipient #${index + 1}:`, result.reason);
+            }
+          });
+    // const response=await sendEmail({to_email:process.env.USER_EMAIL,subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
     
-    console.log("response from email",response);
+    // console.log(responses);
     }
     catch(error){
         console.error("error in sending email",error);

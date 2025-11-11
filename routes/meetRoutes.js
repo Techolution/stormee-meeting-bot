@@ -13,12 +13,23 @@ import {
   exitMeeting,
 } from "../controllers/meetController.js";
 
+import {
+    addRecipientController,
+    removeRecipientController,
+    getRecipientsController
+} from "../controllers/recipientController.js";
+
 const router = express.Router();
 
 // Health check route
 const checkingHealth = (req, res) => {
   res.status(200).json({ status: "OK", message: "Service is running" });
 };
+
+// Recipient routes
+router.get("/recipient/fetch", getRecipientsController);
+router.post("/recipient/add", addRecipientController);
+router.delete("/recipient/remove", removeRecipientController);
 
 // Existing API routes for Google Meet functionality
 router.post("/start", startCaptionsController);
