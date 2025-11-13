@@ -24,6 +24,8 @@ let chatScrapingActive = true;
 let participantCount=0;
 let participantMonitorInterval = null; // To store the interval for participant 
 let projectId=null;
+let adminUserEmail=null; // TODO: admin per meeting instead of global
+let adminUserName=null;
 let recipients={}; // To store recipients per meetingId: {meetingId: Set<emails>}
 
 async function ensureAuthSession(meetingUrl, asGuest = false) {
@@ -179,15 +181,32 @@ async function performGoogleLogin() {
   }
 }
 
-async function joinMeeting(meetingUrl, asGuest = false) {
+async function joinMeeting(meetingUrl, adminuser={}, asGuest = false) {
   console.log("🚀 Joining meeting:", meetingUrl);
+
+  // Normalize admin user input: can be an email string or an object { email, name }
+  // TODO: review the normalisation
+  if (adminuser) {
+    if (typeof adminuser === "object") {
+      adminUserEmail = adminuser.email || process.env.USER_EMAIL || null;
+      adminUserName = adminuser.name || adminuser.email?.split('@')[0] || process.env.USER_NAME || null;
+    } else if (typeof adminuser === "string") {
+      adminUserEmail = adminuser;
+      adminUserName = process.env.USER_NAME || null;
+    }
+  } else {
+    adminUserEmail = process.env.USER_EMAIL || null;
+    adminUserName = process.env.USER_NAME || null;
+  }
+
+  console.log("adminUserEmail", adminUserEmail, "adminUserName", adminUserName);
 
   await ensureAuthSession(meetingUrl, asGuest);
 
   // Wait for the page to load
   await page.waitForLoadState('networkidle');
 
-  const guestName = "Stormee.Ai";
+  const guestName = process.env.USER_NAME || "Stormee.Ai";
 
   // If guest mode, handle name input and ask to join
   if (asGuest) {
@@ -245,22 +264,28 @@ async function joinMeeting(meetingUrl, asGuest = false) {
   } else {
     console.log("✅ Mic already off.");
   }
-  if (currentMeetingId && audioChunks[currentMeetingId]) {
+    if (currentMeetingId && audioChunks[currentMeetingId]) {
     console.log("ℹ️ Audio recording already in progress for meeting:", currentMeetingId);
   } else {
     const meetingId = currentMeetingId || `meeting-${Date.now()}`;
     console.log(`🚀 Triggering audio recording for meeting: ${meetingId}`);
     try {
       const creatingProjectResponse=await createProject({
-        user:"shaik.sultana@techolution.com",description:"",
-        user_name:"Shaik Sumaiya",name:meetingId});
+        user: adminUserEmail ?? process.env.USER_EMAIL,
+        description: "",
+        user_name: adminUserName ?? process.env.USER_NAME,
+        name: meetingId
+      });
       if(creatingProjectResponse.project_id){
         projectId=creatingProjectResponse.project_id;
         console.log("Successfully created the project folder");
 
+        // Ensure admin is included as a recipient for this meeting
+        if (adminUserEmail) addRecipient(adminUserEmail, meetingId);
+
         await startAudioRecording(meetingId);
 
-        await startChatScraping(); // start chat scraping on joining
+        await startChatScraping(); // TODO: might not start by default | start chat scraping on joining
       }
       else{
         console.log("failed to intitiate the folder creation");
@@ -495,7 +520,7 @@ async function saveAudio(meetingId) {
 
   delete audioChunks[meetingId];
 }
-async function uploadAudioFile(meetingId, wavPath) {
+async function uploadAudioFile(meetingId, wavPath, adminUser) {
   if (!wavPath || !fs.existsSync(wavPath)) {
     console.error(`WAV file not found for upload: ${wavPath}`);
     return false;
@@ -518,11 +543,11 @@ async function uploadAudioFile(meetingId, wavPath) {
       try{
       if(uploadResponse){
         const artifact= await generateMeetingModeArtifact({
-          audioName:`${meetingId}.wav`,
-          projectId:projectId,
-          displayName:`Meeting Artifact - ${meetingId}`,
-          userEmail:"shaik.sultana@techolution.com",
-          userName:"Shaik Sumaiya",
+          audioName: `${meetingId}.wav`,
+          projectId: projectId,
+          displayName: `Meeting Artifact - ${meetingId}`,
+          userEmail: adminUserEmail ?? process.env.USER_EMAIL,
+          userName: adminUserName ?? process.env.USER_NAME
         })
         try{
           const artifactData = artifact?.artifact_upload_result?.artifact_data?.artifactData;
@@ -531,6 +556,7 @@ async function uploadAudioFile(meetingId, wavPath) {
           // console.log(artifact?.artifact_upload_result);
           console.log('ARTIFACT DATA\n', artifactData);
 
+          // Send emails to meeting recipients (admin is already added as a recipient above)
           await createArtifactAndSendEmail(artifact, projectId, getRecipients(meetingId));
         }
         catch(err){
@@ -582,7 +608,7 @@ async function stopAudioRecording() {
   if (currentMeetingId) {
     const wavPath=await saveAudio(currentMeetingId);
     if (wavPath && projectId) {
-      await uploadAudioFile(currentMeetingId, wavPath);
+      await uploadAudioFile(currentMeetingId, wavPath, adminUserEmail);
 
   
       
@@ -954,10 +980,11 @@ function removeRecipient(email) {
   return Array.from(recipients[currentMeetingId] || []);
 }
 
-function getRecipients() {
-  const users =  Array.from(recipients[currentMeetingId] || []);
+function getRecipients(meetingId) {
+  const id = meetingId || currentMeetingId;
+  const users = Array.from(recipients[id] || []);
 
-  console.log(`Recipients for meeting ${currentMeetingId}:`, users);
+  console.log(`Recipients for meeting ${id}:`, users);
 
   return users;
 }
