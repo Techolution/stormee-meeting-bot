@@ -33,9 +33,9 @@ io.on("connection", (socket) => {
 
   // Handle incoming audio chunks from the bot
   socket.on("audioChunk", (data) => {
-    console.log(
-      `🎵 Received audio chunk from meeting ${data.meetingId}, chunk ID: ${data.chunkId}`
-    );
+    // console.log(
+    //   `🎵 Received audio chunk from meeting ${data.meetingId}, chunk ID: ${data.chunkId}`
+    // );
     console.log(`📅 Timestamp: ${data.timestamp}`);
     console.log(
       `📊 Audio data size: ${
