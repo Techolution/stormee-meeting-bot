@@ -10,7 +10,7 @@ const manager = MeetingManager.getInstance();
  */
 const loginController = async (req, res) => {
   try {
-    const { meetingUrl, adminUser, asGuest = false } = req.body;
+    const { meetingUrl, adminUser, asGuest = false, recipients = [] } = req.body;
     
     if (!meetingUrl) {
       return res.status(400).json({ error: "meetingUrl is required" });
@@ -21,7 +21,8 @@ const loginController = async (req, res) => {
     const { meetingId } = await manager.createMeeting(
       meetingUrl,
       adminUser || {},
-      asGuest
+      asGuest,
+      recipients
     );
 
     // TODO: Return meeting ID in proper format

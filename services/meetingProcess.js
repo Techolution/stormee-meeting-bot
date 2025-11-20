@@ -245,6 +245,7 @@ import {
 const meetingId = process.env.MEETING_ID;
 const meetingUrl = process.env.MEETING_URL;
 const adminUser = JSON.parse(process.env.ADMIN_USER || '{}');
+const recipients = JSON.parse(process.env.RECIPIENTS || '[]');
 const asGuest = process.env.AS_GUEST === 'true';
 
 console.log(`🤖 [Child-${meetingId}] Process started for URL: ${meetingUrl}`);
@@ -293,10 +294,10 @@ async function initialize() {
   try {
     console.log(`🚀 [Child-${meetingId}] Initializing... Joining meeting: ${meetingUrl}`);
     
-    await joinMeeting(meetingUrl, adminUser, asGuest);
+    await joinMeeting(meetingUrl, adminUser, asGuest, recipients);
     
     console.log(`✅ [Child-${meetingId}] Successfully joined meeting`);
-    sendToParent('JOINED', { meetingId, meetingUrl });
+    sendToParent('JOINED', { meetingId, meetingUrl, recipients });
     
   } catch (error) {
     console.error(`❌ [Child-${meetingId}] Failed to join:`, error);

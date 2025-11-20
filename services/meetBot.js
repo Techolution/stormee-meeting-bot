@@ -1183,7 +1183,7 @@ async function performGoogleLogin() {
   }
 }
 
-async function joinMeeting(meetingUrl, adminuser = {}, asGuest = false) {
+async function joinMeeting(meetingUrl, adminuser = {}, asGuest = false, recipients=[]) {
   // Set currentMeetingId from environment variable (passed by parent process)
   currentMeetingId = process.env.MEETING_ID;
   
@@ -1276,9 +1276,18 @@ async function joinMeeting(meetingUrl, adminuser = {}, asGuest = false) {
       console.log(`✅ [meetBot-${currentMeetingId}] Successfully created project folder. ProjectID: ${projectId}`);
 
       // Add admin as recipient
-      if (adminUserEmail) {
-        addRecipient(adminUserEmail, currentMeetingId);
+      // if (adminUserEmail) {
+      //   addRecipient(adminUserEmail);
+      // }
+
+      if (!Array.isArray(recipients)) {
+        recipients = [];
       }
+      
+      addRecipient(recipients);
+
+      console.log("=== MEETING RECIPIENTS ===");
+      getRecipients();
 
       await startAudioRecording(currentMeetingId);
       await startChatScraping();
@@ -1921,7 +1930,7 @@ function startParticipantMonitoring() {
     } catch (error) {
       console.error(`❌ [meetBot-${currentMeetingId}] Error during participant monitoring:`, error);
     }
-  }, 2000);
+  }, 1000 * 60 * 5);
 }
 
 function stopParticipantMonitoring() {
@@ -1932,6 +1941,7 @@ function stopParticipantMonitoring() {
   }
 }
 
+// Can add email or array of emails as recipients for meeting artifacts
 function addRecipient(email, meetingId) {
   const targetMeetingId = meetingId || currentMeetingId;
   
@@ -1943,6 +1953,17 @@ function addRecipient(email, meetingId) {
   if (!recipients[targetMeetingId]) {
     recipients[targetMeetingId] = new Set();
   }
+
+  const emails = Array.isArray(email) ? email : [email];
+  
+  emails.forEach(e => {
+    if (e && typeof e === 'string' && e.trim()) {
+      recipients[targetMeetingId].add(e.trim());
+      console.log(`✅ [meetBot-${targetMeetingId}] Added recipient: ${e.trim()}`);
+    } else {
+      console.warn(`⚠️ [meetBot-${targetMeetingId}] Invalid email skipped: ${e}`);
+    }
+  });
 
   recipients[targetMeetingId].add(email);
   console.log(`✅ [meetBot-${targetMeetingId}] Added recipient: ${email}`);

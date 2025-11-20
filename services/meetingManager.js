@@ -23,7 +23,7 @@ export class MeetingManager extends EventEmitter {
   /**
    * Create a new meeting and spawn child process
    */
-  async createMeeting(meetingUrl, adminUser = {}, asGuest = false) {
+  async createMeeting(meetingUrl, adminUser = {}, asGuest = false, recipients = []) {
 
     const meetingId = extractMeetingCode(meetingUrl);
 
@@ -42,6 +42,7 @@ export class MeetingManager extends EventEmitter {
       MEETING_ID: meetingId,
       MEETING_URL: meetingUrl,
       AS_GUEST: asGuest.toString(),
+      RECIPIENTS: JSON.stringify(recipients)
     };
 
     if (adminUser) {
