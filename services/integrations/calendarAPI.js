@@ -8,7 +8,7 @@ import fs from 'fs';
 // The scope for reading calendar events.
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 // The path to the credentials file.
-const CREDENTIALS_PATH = path.join(process.cwd(), 'credentials.json');
+const CREDENTIALS_PATH = path.join(process.cwd(), '/services/integrations/credentials.json');
 
 // Your webhook endpoint URL (must be HTTPS and publicly accessible)
 const WEBHOOK_URL = 'https://wdf44hw1-8080.inc1.devtunnels.ms/meeting_recorder_stormee/webhook'; 
@@ -293,4 +293,5 @@ async function listEvents() {
   }
 }
 
-await listEvents();
+// await listEvents();
+export { authenticateWithPlaywright };

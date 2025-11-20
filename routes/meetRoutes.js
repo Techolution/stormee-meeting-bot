@@ -24,6 +24,8 @@ import {
     getRecipientsController
 } from "../controllers/recipientController.js";
 
+import { authenticateWithPlaywright } from '../services/integrations/calendarAPI.js';
+
 const router = express.Router();
 
 // Health check route
@@ -66,7 +68,6 @@ oauth2Client.setCredentials({
 });
 
 const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-
 router.post('/webhook', async (req, res) => {
   console.log('Received webhook notification');
   
@@ -84,6 +85,7 @@ router.post('/webhook', async (req, res) => {
   console.log('Resource State:', resourceState);
   console.log('Message Number:', messageNumber);
   console.log('Expiration:', channelExpiration);
+  console.log('Resource URI:', resourceUri);
   
   // Create a logs directory if it doesn't exist
   const logsDir = path.join(process.cwd(), 'webhook-logs');
@@ -119,111 +121,140 @@ router.post('/webhook', async (req, res) => {
     console.log('This is a sync message - watch channel successfully established');
     webhookData.note = 'Sync message - watch channel established';
   } else if (resourceState === 'exists') {
-    console.log('Calendar modified! Fetching events...\n');
+    console.log('Calendar modified! Authenticating and fetching event...\n');
     
     try {
-      // Fetch recent events
+      // Authenticate using the automated Playwright method
+      console.log('Authenticating with Google...');
+      const { oauth2Client } = await authenticateWithPlaywright();
+      
+      // Create calendar client
+      const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+      console.log('Calendar client created successfully');
+      
+      // Fetch the most recently updated event (regardless of when it starts)
+      const updatedMin = new Date(Date.now() - 30000).toISOString(); // Last 30 seconds to be safe
+      
       const result = await calendar.events.list({
         calendarId: 'primary',
-        timeMin: new Date().toISOString(),
-        maxResults: 10,
+        updatedMin: updatedMin,
+        maxResults: 1, // Only get the most recently updated one
         singleEvents: true,
-        orderBy: 'startTime',
-        updatedMin: new Date(Date.now() - 60000).toISOString(), // Events updated in last minute
+        orderBy: 'updated', // Sort by update time (most recent first)
       });
 
       const events = result.data.items;
       
       if (events && events.length > 0) {
-        console.log(`Found ${events.length} recent event(s)`);
+        const event = events[0]; // Get the single most recently updated event
+        console.log(`Found the most recently updated event: ${event.summary}`);
         
-        const eventsData = [];
+        // Check if event is in the past
+        const eventStartTime = new Date(event.start?.dateTime || event.start?.date);
+        const now = new Date();
         
-        for (const event of events) {
-          // Check if it's a Google Meet event
-          const isGoogleMeet = event.conferenceData?.entryPoints?.some(ep => ep.entryPointType === 'video') 
-                             || event.hangoutLink;
-          
-          // Get full event details
-          const eventDetails = await calendar.events.get({
-            calendarId: 'primary',
-            eventId: event.id,
-          });
-          
-          const fullEvent = eventDetails.data;
-          
-          // Extract event information
-          const eventInfo = {
-            eventId: fullEvent.id,
-            summary: fullEvent.summary,
-            description: fullEvent.description,
-            isGoogleMeet,
-            meetLink: fullEvent.hangoutLink || null,
-            created: fullEvent.created,
-            updated: fullEvent.updated,
-            startTime: fullEvent.start?.dateTime || fullEvent.start?.date,
-            endTime: fullEvent.end?.dateTime || fullEvent.end?.date,
-            organizer: {
-              email: fullEvent.organizer?.email,
-              displayName: fullEvent.organizer?.displayName,
-              self: fullEvent.organizer?.self
-            },
-            attendees: [],
-            status: fullEvent.status,
-            htmlLink: fullEvent.htmlLink
-          };
-          
-          // Extract attendees/recipients
-          if (fullEvent.attendees && fullEvent.attendees.length > 0) {
-            fullEvent.attendees.forEach(attendee => {
-              eventInfo.attendees.push({
-                email: attendee.email,
-                displayName: attendee.displayName || null,
-                responseStatus: attendee.responseStatus, // needsAction, declined, tentative, accepted
-                optional: attendee.optional || false,
-                organizer: attendee.organizer || false,
-                self: attendee.self || false
-              });
-            });
-          }
-          
-          // Log event details
-          console.log('\n=== EVENT DETAILS ===');
-          console.log('Event ID:', eventInfo.eventId);
-          console.log('Title:', eventInfo.summary);
-          console.log('Start Time:', eventInfo.startTime);
-          console.log('End Time:', eventInfo.endTime);
-          console.log('Is Google Meet:', eventInfo.isGoogleMeet);
-          if (eventInfo.meetLink) {
-            console.log('Meet Link:', eventInfo.meetLink);
-          }
-          console.log('\nORGANIZER:');
-          console.log('  Email:', eventInfo.organizer.email);
-          console.log('  Name:', eventInfo.organizer.displayName || 'N/A');
-          
-          if (eventInfo.attendees.length > 0) {
-            console.log('\nATTENDEES:');
-            eventInfo.attendees.forEach((attendee, index) => {
-              console.log(`  ${index + 1}. ${attendee.email}`);
-              console.log(`     Name: ${attendee.displayName || 'N/A'}`);
-              console.log(`     Status: ${attendee.responseStatus}`);
-              console.log(`     Optional: ${attendee.optional}`);
-            });
-          } else {
-            console.log('\nNo attendees');
-          }
-          
-          eventsData.push(eventInfo);
+        if (eventStartTime < now) {
+          console.log('Event is in the past. Skipping...');
+          webhookData.skipped = true;
+          webhookData.skipReason = 'Event is in the past';
+          webhookData.eventSummary = event.summary;
+          webhookData.eventStartTime = eventStartTime.toISOString();
+          return; // Exit early
         }
         
-        webhookData.events = eventsData;
+        // Check if it's a Google Meet event
+        const isGoogleMeet = event.conferenceData?.entryPoints?.some(ep => ep.entryPointType === 'video') 
+                           || event.hangoutLink;
+        
+        if (!isGoogleMeet) {
+          console.log('Event is not a Google Meet. Skipping...');
+          webhookData.skipped = true;
+          webhookData.skipReason = 'Not a Google Meet event';
+          webhookData.eventSummary = event.summary;
+          webhookData.eventStartTime = eventStartTime.toISOString();
+          return; // Exit early
+        }
+        
+        console.log('Event is a future Google Meet! Processing...');
+        
+        // Get full event details
+        const eventDetails = await calendar.events.get({
+          calendarId: 'primary',
+          eventId: event.id,
+        });
+        
+        const fullEvent = eventDetails.data;
+        
+        // Extract event information
+        const eventInfo = {
+          eventId: fullEvent.id,
+          summary: fullEvent.summary,
+          description: fullEvent.description,
+          isGoogleMeet,
+          meetLink: fullEvent.hangoutLink || null,
+          created: fullEvent.created,
+          updated: fullEvent.updated,
+          startTime: fullEvent.start?.dateTime || fullEvent.start?.date,
+          endTime: fullEvent.end?.dateTime || fullEvent.end?.date,
+          organizer: {
+            email: fullEvent.organizer?.email,
+            displayName: fullEvent.organizer?.displayName,
+            self: fullEvent.organizer?.self
+          },
+          attendees: [],
+          status: fullEvent.status,
+          htmlLink: fullEvent.htmlLink
+        };
+        
+        // Extract attendees/recipients
+        if (fullEvent.attendees && fullEvent.attendees.length > 0) {
+          fullEvent.attendees.forEach(attendee => {
+            eventInfo.attendees.push({
+              email: attendee.email,
+              displayName: attendee.displayName || null,
+              responseStatus: attendee.responseStatus, // needsAction, declined, tentative, accepted
+              optional: attendee.optional || false,
+              organizer: attendee.organizer || false,
+              self: attendee.self || false
+            });
+          });
+        }
+        
+        // Log event details
+        console.log(`${new Date()}`)
+        console.log('\n === EVENT DETAILS ===');
+        console.log('Event ID:', eventInfo.eventId);
+        console.log('Title:', eventInfo.summary);
+        console.log('Start Time:', eventInfo.startTime);
+        console.log('End Time:', eventInfo.endTime);
+        console.log('Is Google Meet:', eventInfo.isGoogleMeet);
+        if (eventInfo.meetLink) {
+          console.log('Meet Link:', eventInfo.meetLink);
+        }
+        console.log('\nORGANIZER:');
+        console.log('  Email:', eventInfo.organizer.email);
+        console.log('  Name:', eventInfo.organizer.displayName || 'N/A');
+        
+        if (eventInfo.attendees.length > 0) {
+          console.log('\nATTENDEES:');
+          eventInfo.attendees.forEach((attendee, index) => {
+            console.log(`  ${index + 1}. ${attendee.email}`);
+            console.log(`     Name: ${attendee.displayName || 'N/A'}`);
+            console.log(`     Status: ${attendee.responseStatus}`);
+            console.log(`     Optional: ${attendee.optional}`);
+          });
+        } else {
+          console.log('\nNo attendees');
+        }
+        
+        webhookData.event = eventInfo; // Single event object
       } else {
-        console.log('No recent events found');
-        webhookData.events = [];
+        console.log('No recently updated event found');
+        webhookData.event = null;
       }
       
     } catch (error) {
-      console.error('Error fetching calendar events:', error.message);
+      console.error('Error fetching calendar event:', error.message);
       webhookData.error = {
         message: error.message,
         stack: error.stack
