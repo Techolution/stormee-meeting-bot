@@ -11,7 +11,7 @@ const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 const CREDENTIALS_PATH = path.join(process.cwd(), '/services/integrations/credentials.json');
 
 // Your webhook endpoint URL (must be HTTPS and publicly accessible)
-const WEBHOOK_URL = 'https://wdf44hw1-8080.inc1.devtunnels.ms/meeting_recorder_stormee/webhook'; 
+const WEBHOOK_URL = 'https://9bptz7pv-8080.inc1.devtunnels.ms/meeting_recorder_stormee/webhook'; 
 
 /**
  * Authenticate using Playwright
@@ -179,6 +179,7 @@ async function listEvents() {
   try {
     // Set up calendar watch (COMMENTED OUT)
     // const watchData = await setupCalendarWatch(calendar);
+    // console.log('Watch Data:', watchData);
     
     console.log('\n\n\t\t-----------------------------\n\n');
 
@@ -292,6 +293,5 @@ async function listEvents() {
     console.error('Full error:', error);
   }
 }
-
-// await listEvents();
-export { authenticateWithPlaywright };
+// listEvents();
+export { authenticateWithPlaywright, setupCalendarWatch, stopCalendarWatch, listEvents };

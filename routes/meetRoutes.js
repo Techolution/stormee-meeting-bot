@@ -24,7 +24,7 @@ import {
     getRecipientsController
 } from "../controllers/recipientController.js";
 
-import { authenticateWithPlaywright } from '../services/integrations/calendarAPI.js';
+import { authenticateWithPlaywright, stopCalendarWatch } from '../services/integrations/calendarAPI.js';
 
 const router = express.Router();
 
@@ -67,7 +67,7 @@ oauth2Client.setCredentials({
   refresh_token: process.env.REFRESH_TOKEN,
 });
 
-const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+// const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 router.post('/webhook', async (req, res) => {
   console.log('Received webhook notification');
   
@@ -131,6 +131,8 @@ router.post('/webhook', async (req, res) => {
       // Create calendar client
       const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
       console.log('Calendar client created successfully');
+
+      // await stopCalendarWatch(calendar, '259a7921-26e6-4330-b010-c6e8e913bc4e', 'X5hdzpGMAtIvOtPkCzNN3DpUyDY');
       
       // Fetch the most recently updated event (regardless of when it starts)
       const updatedMin = new Date(Date.now() - 30000).toISOString(); // Last 30 seconds to be safe
