@@ -25,6 +25,7 @@ import {
 } from "../controllers/recipientController.js";
 
 import { authenticateWithPlaywright, stopCalendarWatch } from '../services/integrations/calendarAPI.js';
+import { scheduleMeeting, meetingQueue, queueEvents } from '../services/jobs/meetingSchedules.js';
 
 const router = express.Router();
 
@@ -248,6 +249,19 @@ router.post('/webhook', async (req, res) => {
         } else {
           console.log('\nNo attendees');
         }
+
+        await scheduleMeeting({
+          meetingEventId: eventInfo.eventId,
+          startTime: new Date(eventInfo.startTime),
+          endTime: new Date(eventInfo.endTime),
+          meetUrl: eventInfo.meetLink,
+          organizer: eventInfo.organizer.email,
+          recipients: eventInfo.attendees.map(a => a.email)
+        })
+
+        console.log('Meeting scheduled! Waiting for notification...');
+        console.log('Current queue count:', await meetingQueue.getJobCounts());
+        // console.log('Current queue events count:', await queueEvents.getJobCounts());
         
         webhookData.event = eventInfo; // Single event object
       } else {
