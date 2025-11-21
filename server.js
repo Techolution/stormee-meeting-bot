@@ -4,6 +4,7 @@ import meetRoutes from "./routes/meetRoutes.js";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import './services/jobs/authCleaner.js';
 
 dotenv.config();
 

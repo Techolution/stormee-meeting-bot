@@ -1096,10 +1096,10 @@ async function ensureAuthSession(meetingUrl, asGuest = false) {
     await performGoogleLogin();
     await context.storageState({ path: AUTH_PATH });
     console.log(`✅ [meetBot-${currentMeetingId}] Login successful. Saved session.`);
-  } else {
-    await page.goto(meetingUrl);
-    console.log(asGuest ? `✅ [meetBot-${currentMeetingId}] Joining as guest.` : `✅ [meetBot-${currentMeetingId}] Using existing auth session.`);
   }
+
+  await page.goto(meetingUrl);
+  console.log(asGuest ? `✅ [meetBot-${currentMeetingId}] Joining as guest.` : `✅ [meetBot-${currentMeetingId}] Using existing auth session.`);
 
   return { browser, context, page };
 }
@@ -1994,6 +1994,7 @@ export {
   startCaptions,
   stopCaptions,
   playAudio,
+  performGoogleLogin,
   joinMeeting,
   pauseAudio,
   startAudioRecording,
