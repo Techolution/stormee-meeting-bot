@@ -80,11 +80,12 @@ export class MeetingManager extends EventEmitter {
     this.setupProcessHandlers(meetingId, childProcess);
     
     try {
-      await this.waitForStatus(meetingId, 'active', 60000);
+      await this.waitForStatus(meetingId, 'active', 120000); // Timeout to 120s
       console.log(`✅ [Manager] Meeting ${meetingId} is now ACTIVE\n`);
       return { meetingId };
     } catch (error) {
       console.error(`❌ [Manager] Meeting ${meetingId} failed to initialize:`, error.message);
+      console.error(`   Current status: ${meetingData.status}`);
       this.cleanupMeeting(meetingId);
       throw error;
     }
@@ -170,14 +171,20 @@ export class MeetingManager extends EventEmitter {
       this.handleChildMessage(meetingId, msg);
     });
     
-    // Handle stdout (for logging)
+    // Handle stdout (for logging) - inherit to parent console
     childProcess.stdout.on('data', (data) => {
-      console.log(`📋 [stdout-${meetingId}] ${data.toString().trim()}`);
+      const lines = data.toString().trim().split('\n');
+      lines.forEach(line => {
+        console.log(`📋 [Child-${meetingId}] ${line}`);
+      });
     });
     
-    // Handle stderr
+    // Handle stderr - inherit to parent console
     childProcess.stderr.on('data', (data) => {
-      console.error(`❌ [stderr-${meetingId}] ${data.toString().trim()}`);
+      const lines = data.toString().trim().split('\n');
+      lines.forEach(line => {
+        console.error(`❌ [Child-ERR-${meetingId}] ${line}`);
+      });
     });
     
     // Handle process errors
@@ -229,6 +236,12 @@ export class MeetingManager extends EventEmitter {
     
     // Handle status updates
     switch (msg.type) {
+      case 'READY':
+        console.log(`✅ [Manager] Child process for meeting ${meetingId} is READY`);
+        meeting.status = 'ready';
+        this.emit('meetingReady', { meetingId });
+        break;
+        
       case 'JOINED':
         console.log(`✅ [Manager] Meeting ${meetingId} JOINED successfully`);
         meeting.status = 'active';
@@ -267,6 +280,9 @@ export class MeetingManager extends EventEmitter {
       case 'CHAT_MESSAGE':
         this.emit('chatMessage', { meetingId, message: msg.data });
         break;
+        
+      default:
+        console.log(`   ℹ️ Unhandled message type: ${msg.type}`);
     }
   }
   
@@ -274,7 +290,7 @@ export class MeetingManager extends EventEmitter {
    * Wait for meeting to reach specific status
    */
   waitForStatus(meetingId, targetStatus, timeout) {
-    console.log(`⏳ [Manager] Waiting for meeting ${meetingId} to reach status: ${targetStatus}`);
+    console.log(`⏳ [Manager] Waiting for meeting ${meetingId} to reach status: ${targetStatus} (timeout: ${timeout}ms)`);
     
     return new Promise((resolve, reject) => {
       const meeting = this.activeMeetings.get(meetingId);
@@ -287,8 +303,17 @@ export class MeetingManager extends EventEmitter {
         return resolve();
       }
       
+      const startTime = Date.now();
+      
       const checkInterval = setInterval(() => {
         const current = this.activeMeetings.get(meetingId);
+        const elapsed = Date.now() - startTime;
+        
+        // Log progress every 10 seconds
+        if (elapsed % 10000 < 500) {
+          console.log(`   ⏱️ Still waiting... Current status: ${current?.status || 'unknown'} (${Math.floor(elapsed/1000)}s elapsed)`);
+        }
+        
         if (!current) {
           clearInterval(checkInterval);
           clearTimeout(timeoutHandle);
@@ -307,7 +332,8 @@ export class MeetingManager extends EventEmitter {
       
       const timeoutHandle = setTimeout(() => {
         clearInterval(checkInterval);
-        reject(new Error(`Timeout waiting for status ${targetStatus}`));
+        const current = this.activeMeetings.get(meetingId);
+        reject(new Error(`Timeout waiting for status ${targetStatus}. Current status: ${current?.status || 'unknown'}`));
       }, timeout);
     });
   }
