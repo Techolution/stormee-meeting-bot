@@ -1,15 +1,8 @@
 import { Queue, Worker, QueueEvents } from "bullmq";
-import Redis from "ioredis";
+import { redisConnection } from "../../loaders/redis.loaders.js";
 import { MeetingManager } from "../meetingManager.js";
 
 const manager = MeetingManager.getInstance();
-
-// REDIS CONNECTION
-const redisConnection = new Redis({
-  host: "localhost",
-  port: 6379,
-  maxRetriesPerRequest: null, // Required for BullMQ
-});
 
 // QUEUE SETUP
 const meetingQueue = new Queue("meeting-notifications", {

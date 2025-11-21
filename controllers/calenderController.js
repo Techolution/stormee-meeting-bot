@@ -1,5 +1,6 @@
-import { authenticateWithPlaywright } from '../services/integrations/calendarAPI.js';
+import { authenticateWithPlaywright, stopCalendarWatch } from '../services/integrations/calendarAPI.js';
 import { scheduleMeeting, meetingQueue } from '../services/jobs/meetingSchedules.js';
+import { createInitialCalendarChannel } from '../services/jobs/channelIdCreationScheduler.js';
 import fs from 'fs';
 import path from 'path';
 import {google} from 'googleapis';
@@ -37,7 +38,7 @@ const calenderNotificationController = async (req, res) => {
     console.log("Resource URI:", resourceUri);
 
     // Create a logs directory if it doesn't exist
-    const logsDir = path.join(process.cwd(), "webhook-logs");
+    const logsDir = path.join(process.cwd(), "logs");
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir, { recursive: true });
     }
@@ -82,6 +83,9 @@ const calenderNotificationController = async (req, res) => {
         // Create calendar client
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });
         console.log("Calendar client created successfully");
+
+        // await stopCalendarWatch(calendar, "cf08763b-e492-4425-91b4-868354cd91d2", "X5hdzpGMAtIvOtPkCzNN3DpUyDY");
+        // await createInitialCalendarChannel("primary")
 
         // Fetch the most recently updated event (regardless of when it starts)
         const updatedMin = new Date(Date.now() - 30000).toISOString(); // Last 30 seconds to be safe
@@ -234,7 +238,7 @@ const calenderNotificationController = async (req, res) => {
     }
 
     // Write to file
-    const filepath = path.join(logsDir, "webhooks.json");
+    const filepath = path.join(logsDir, "webhook-logs.json");
 
     try {
       let existingData = [];
