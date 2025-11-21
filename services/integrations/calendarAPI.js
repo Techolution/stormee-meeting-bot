@@ -1,17 +1,9 @@
-import path from 'node:path';
 import process from 'node:process';
 import {google} from 'googleapis';
 import crypto from 'node:crypto';
 import { chromium } from 'playwright';
 import fs from 'fs';
-
-// The scope for reading calendar events.
-const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
-// The path to the credentials file.
-const CREDENTIALS_PATH = path.join(process.cwd(), '/services/integrations/credentials.json');
-
-// Your webhook endpoint URL (must be HTTPS and publicly accessible)
-const WEBHOOK_URL = 'https://9bptz7pv-8080.inc1.devtunnels.ms/meeting_recorder_stormee/webhook'; 
+import { SCOPES, CREDENTIALS_PATH, WEBHOOK_URL } from '../../constants/calender.constants.js'; 
 
 /**
  * Authenticate using Playwright
@@ -58,7 +50,6 @@ async function authenticateWithPlaywright() {
     await emailInput.waitFor({ timeout: 10000 });
     await emailInput.fill(email);
     await page.locator('#identifierNext button').click();
-
 
     console.log(`Clicked Next after email`);
     
