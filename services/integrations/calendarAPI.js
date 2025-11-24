@@ -10,12 +10,12 @@ import { SCOPES, WEBHOOK_URL } from '../../constants/calender.constants.js';
 async function authenticateWithPlaywright() {
   const credentials = {
     web: {
-      client_id: process.env.GOOGLE_CLIENT_ID || "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
+      client_id: process.env.GOOGLE_CLIENT_ID,
       project_id: "proposal-auto-ai-internal",
       auth_uri: "https://accounts.google.com/o/oauth2/auth",
       token_uri: "https://oauth2.googleapis.com/token",
       auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-      client_secret: process.env.GOOGLE_CLIENT_SECRET || "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",
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
       redirect_uris: [
         "https://dev.appmod.ai",
         "https://appmod.ai",
@@ -123,8 +123,8 @@ async function authenticateWithPlaywright() {
 // Replace authenticateWithPlaywright() with this:
 async function authenticateWithRefreshToken() {
   const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID || "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
-    process.env.GOOGLE_CLIENT_SECRET || "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",
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
     "https://dev.appmod.ai"
   );
 
