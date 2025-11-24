@@ -129,7 +129,7 @@ async function authenticateWithRefreshToken() {
   );
 
   oauth2Client.setCredentials({
-    refresh_token: process.env.GOOGLE_AUTH_REFRESH_TOKEN || "1//0gAfwi_zyv8vbCgYIARAAGBASNwF-L9Ir1jTvnyeCRh2tFp6oiSdroIRdxTyCTogefIT4Y52Um-Rv2pbqod2ifSAnABJzlrM1SdE",
+    refresh_token: process.env.GOOGLE_AUTH_REFRESH_TOKEN,
   });
 
   console.log("Authenticated using refresh token.", oauth2Client);
