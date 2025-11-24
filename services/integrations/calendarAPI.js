@@ -10,13 +10,12 @@ import { SCOPES, WEBHOOK_URL } from '../../constants/calender.constants.js';
 async function authenticateWithPlaywright() {
   const credentials = {
     web: {
-      client_id:
-        "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
+      client_id: process.env.GOOGLE_CLIENT_ID || "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
       project_id: "proposal-auto-ai-internal",
       auth_uri: "https://accounts.google.com/o/oauth2/auth",
       token_uri: "https://oauth2.googleapis.com/token",
       auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-      client_secret: "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",
+      client_secret: process.env.GOOGLE_CLIENT_SECRET || "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",
       redirect_uris: [
         "https://dev.appmod.ai",
         "https://appmod.ai",
@@ -124,14 +123,13 @@ async function authenticateWithPlaywright() {
 // Replace authenticateWithPlaywright() with this:
 async function authenticateWithRefreshToken() {
   const oauth2Client = new google.auth.OAuth2(
-    "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
-    "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",
+    process.env.GOOGLE_CLIENT_ID || "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
+    process.env.GOOGLE_CLIENT_SECRET || "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",
     "https://dev.appmod.ai"
   );
 
   oauth2Client.setCredentials({
-    refresh_token:
-      "1//0gAfwi_zyv8vbCgYIARAAGBASNwF-L9Ir1jTvnyeCRh2tFp6oiSdroIRdxTyCTogefIT4Y52Um-Rv2pbqod2ifSAnABJzlrM1SdE",
+    refresh_token: process.env.GOOGLE_AUTH_REFRESH_TOKEN || "1//0gAfwi_zyv8vbCgYIARAAGBASNwF-L9Ir1jTvnyeCRh2tFp6oiSdroIRdxTyCTogefIT4Y52Um-Rv2pbqod2ifSAnABJzlrM1SdE",
   });
 
   console.log("Authenticated using refresh token.", oauth2Client);
