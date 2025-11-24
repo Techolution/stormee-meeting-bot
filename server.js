@@ -5,6 +5,7 @@ import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import './services/jobs/authCleaner.js';
+import { connectRedis } from "./loaders/redis.loaders.js";
 
 dotenv.config();
 
@@ -64,6 +65,8 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT ?? 8080;
 const BACKEND_URL= process.env.BACKEND_URL ?? `http://localhost:${PORT}`;
+
+connectRedis();
 
 // Start the combined HTTP and WebSocket server
 httpServer.listen(PORT, () => {

@@ -1544,6 +1544,7 @@ async function uploadAudioFile(meetingId, wavPath) {
 
       try {
         if (uploadResponse) {
+          console.log(`📁 [meetBot-${meetingId}] Generating meeting mode artifact...`, uploadResponse);
           const artifact = await generateMeetingModeArtifact({
             audioName: `${meetingId}.wav`,
             projectId: projectId,

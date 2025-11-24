@@ -81,12 +81,14 @@ const createProject = async ({ user, name, description, user_name }) => {
     };
   
     try {
+      console.log('Calling generateMeetingModeArtifact API with payload:', payload);
       const response = await axios.post(url, payload, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json'
         },
       });
+      console.log('generateMeetingModeArtifact API response status:', response.status);
       if (response.status!==200) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }

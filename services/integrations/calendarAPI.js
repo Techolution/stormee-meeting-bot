@@ -2,15 +2,23 @@ import process from 'node:process';
 import {google} from 'googleapis';
 import crypto from 'node:crypto';
 import { chromium } from 'playwright';
-import fs from 'fs';
-import { SCOPES, CREDENTIALS_PATH, WEBHOOK_URL } from '../../constants/calender.constants.js'; 
+import { SCOPES, WEBHOOK_URL } from '../../constants/calender.constants.js'; 
 
 /**
  * Authenticate using Playwright
  */
 async function authenticateWithPlaywright() {
-  // Load client secrets from credentials file
-  const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf-8'));
+  const credentials = {
+  installed: {
+    client_id: process.env.GOOGLE_CLIENT_ID,
+    project_id: process.env.GOOGLE_PROJECT_ID,
+    auth_uri: process.env.GOOGLE_AUTH_URI,
+    token_uri: process.env.GOOGLE_TOKEN_URI,
+    auth_provider_x509_cert_url: process.env.GOOGLE_AUTH_PROVIDER_CERT_URL,
+    client_secret: process.env.GOOGLE_CLIENT_SECRET,
+    redirect_uris: [process.env.GOOGLE_REDIRECT_LOCAL_URI], 
+  },
+};
   const {client_secret, client_id, redirect_uris} = credentials.installed || credentials.web;
 
   // Create OAuth2 client
