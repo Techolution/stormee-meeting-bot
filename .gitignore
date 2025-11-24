@@ -3,3 +3,10 @@ node_modules
 .env
 package-lock.json
 .appmodconfig
+*.wav
+DOC.txt
+.gitignore
+webhook-logs
+credentials.json
+*.wav
+auth.json

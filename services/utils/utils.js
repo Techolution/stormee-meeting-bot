@@ -99,4 +99,29 @@ function processMeetingData(topicsData) {
     }
     return { description, keyTakeaways };
   };
-export { createArtifactAndSendEmail,parseAudioContent};
+
+function extractMeetingCode(meetingUrl) {
+  if (!meetingUrl || typeof meetingUrl !== 'string') {
+    throw new Error('Invalid meeting URL: must be a non-empty string');
+  }
+
+  // Remove whitespace
+  const trimmed = meetingUrl.trim();
+
+  // Pattern: meet.google.com/CODE (with optional query params)
+  const fullUrlMatch = trimmed.match(/meet\.google\.com\/([a-z0-9-]+)(?:\?|$)/i);
+  
+  if (fullUrlMatch) {
+    return fullUrlMatch[1];
+  }
+
+  // If it's already just the code (e.g., "abc-defg-hij" or "abcdefghij")
+  const codePattern = /^[a-z0-9-]+$/i;
+  if (codePattern.test(trimmed)) {
+    return trimmed;
+  }
+
+  throw new Error(`Invalid Google Meet URL format: ${meetingUrl}`);
+}
+
+export { createArtifactAndSendEmail, parseAudioContent, extractMeetingCode};

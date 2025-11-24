@@ -4,6 +4,8 @@ import meetRoutes from "./routes/meetRoutes.js";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import './services/jobs/authCleaner.js';
+import { connectRedis } from "./loaders/redis.loaders.js";
 
 dotenv.config();
 
@@ -33,9 +35,9 @@ io.on("connection", (socket) => {
 
   // Handle incoming audio chunks from the bot
   socket.on("audioChunk", (data) => {
-    console.log(
-      `🎵 Received audio chunk from meeting ${data.meetingId}, chunk ID: ${data.chunkId}`
-    );
+    // console.log(
+    //   `🎵 Received audio chunk from meeting ${data.meetingId}, chunk ID: ${data.chunkId}`
+    // );
     console.log(`📅 Timestamp: ${data.timestamp}`);
     console.log(
       `📊 Audio data size: ${
@@ -63,6 +65,8 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT ?? 8080;
 const BACKEND_URL= process.env.BACKEND_URL ?? `http://localhost:${PORT}`;
+
+connectRedis();
 
 // Start the combined HTTP and WebSocket server
 httpServer.listen(PORT, () => {

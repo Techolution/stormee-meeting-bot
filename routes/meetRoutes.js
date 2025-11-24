@@ -1,4 +1,5 @@
 import express from "express";
+
 import {
   loginController,
   startAudioController,
@@ -10,6 +11,7 @@ import {
   getRecordingStatusController,
   startChatScrapingController,
   stopChatScrapingController,
+  getAllMeetingsController,
   exitMeeting,
 } from "../controllers/meetController.js";
 
@@ -18,6 +20,8 @@ import {
     removeRecipientController,
     getRecipientsController
 } from "../controllers/recipientController.js";
+
+import { calenderNotificationController } from "../controllers/calenderController.js";
 
 const router = express.Router();
 
@@ -38,6 +42,7 @@ router.get("/health", checkingHealth);
 router.post("/audio", startAudioController);
 router.post("/signin", loginController);
 router.post("/pauseaudio", stopAudioController);
+router.get("/meetings", getAllMeetingsController);
 
 // New API routes for audio recording functionality
 router.post("/record/start", startRecordingController);
@@ -46,5 +51,8 @@ router.get("/record/status", getRecordingStatusController);
 router.post('/chat/start',startChatScrapingController);
 router.get('/chat/stop',stopChatScrapingController);
 router.post('/exit',exitMeeting);
+
+// Calendar webhook route
+router.post('/webhook', calenderNotificationController);
 
 export default router;
