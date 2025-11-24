@@ -9,17 +9,29 @@ import { SCOPES, WEBHOOK_URL } from '../../constants/calender.constants.js';
  */
 async function authenticateWithPlaywright() {
   const credentials = {
-  installed: {
-    client_id: process.env.GOOGLE_CLIENT_ID,
-    project_id: process.env.GOOGLE_PROJECT_ID,
-    auth_uri: process.env.GOOGLE_AUTH_URI,
-    token_uri: process.env.GOOGLE_TOKEN_URI,
-    auth_provider_x509_cert_url: process.env.GOOGLE_AUTH_PROVIDER_CERT_URL,
-    client_secret: process.env.GOOGLE_CLIENT_SECRET,
-    redirect_uris: [process.env.BACKEND_URL], 
-  },
-};
-  const {client_secret, client_id, redirect_uris} = credentials.installed || credentials.web;
+    web: {
+      client_id:
+        "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
+      project_id: "proposal-auto-ai-internal",
+      auth_uri: "https://accounts.google.com/o/oauth2/auth",
+      token_uri: "https://oauth2.googleapis.com/token",
+      auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+      client_secret: "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",
+      redirect_uris: [
+        "https://dev.appmod.ai",
+        "https://appmod.ai",
+        "http://localhost:8080",
+        "http://localhost",
+      ],
+      javascript_origins: [
+        "https://dev.appmod.ai",
+        "https://appmod.ai",
+        "http://localhost:8080",
+        "http://localhost",
+      ],
+    },
+  };
+  const { client_secret, client_id, redirect_uris } = credentials.web;
 
   // Create OAuth2 client
   const oauth2Client = new google.auth.OAuth2(
@@ -40,12 +52,14 @@ async function authenticateWithPlaywright() {
   console.log('\nPlease complete the authentication manually in the browser...\n');
 
   // Launch browser with Playwright
-  const browser = await chromium.launch({ 
+  const browser = await chromium.launch({
     headless: true,
     args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox'
-  ],
+      "--disable-blink-features=AutomationControlled",
+      "--start-maximized",
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
+    ],
     // slowMo: 100 // Slow down operations for better visibility
   });
   const context = await browser.newContext();
@@ -64,7 +78,7 @@ async function authenticateWithPlaywright() {
     await page.locator('button:has-text("Next")').click();
 
     console.log(`Clicked Next after email`);
-    
+
     const password = process.env.GOOGLE_ACCOUNT_PASSWORD;
     const passwordInput = page.locator('input[type="password"]:visible');
     passwordInput.waitFor({ timeout: 10000 });
@@ -77,11 +91,11 @@ async function authenticateWithPlaywright() {
     await allowbutton.waitFor({ timeout: 20000 });
     await allowbutton.click();
     console.log(`Clicked Allow for permissions`);
-    
+
     console.log(`Entered email: ${email}`);
 
     await page.waitForURL(/code=/, { timeout: 300000 }); // 5 minutes timeout
-    
+
     // Extract the authorization code from the URL
     const url = new URL(page.url());
     const code = url.searchParams.get('code');
@@ -93,7 +107,7 @@ async function authenticateWithPlaywright() {
     await browser.close();
 
     // Exchange code for tokens
-    const {tokens} = await oauth2Client.getToken(code);
+    const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
 
     console.log('\n=== TOKENS RECEIVED ===\n');
@@ -105,6 +119,24 @@ async function authenticateWithPlaywright() {
     await browser.close();
     throw error;
   }
+}
+
+// Replace authenticateWithPlaywright() with this:
+async function authenticateWithRefreshToken() {
+  const oauth2Client = new google.auth.OAuth2(
+    "693246358019-le19r0tifj2rfo299075pudj9gf2lnhl.apps.googleusercontent.com",
+    "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",
+    "https://dev.appmod.ai"
+  );
+
+  oauth2Client.setCredentials({
+    refresh_token:
+      "1//0gAfwi_zyv8vbCgYIARAAGBASNwF-L9Ir1jTvnyeCRh2tFp6oiSdroIRdxTyCTogefIT4Y52Um-Rv2pbqod2ifSAnABJzlrM1SdE",
+  });
+
+  console.log("Authenticated using refresh token.", oauth2Client);
+
+  return { oauth2Client };
 }
 
 /**
@@ -137,7 +169,7 @@ async function setupCalendarWatch(calendar) {
     console.log('Watch details:', JSON.stringify(watchResponse.data, null, 2));
     console.log('\nYour webhook will receive notifications for calendar changes.');
     console.log('Expiration:', new Date(parseInt(watchResponse.data.expiration)).toISOString());
-    
+
     return watchResponse.data;
   } catch (error) {
     console.error('Error setting up calendar watch:', error.message);
@@ -152,7 +184,7 @@ async function setupCalendarWatch(calendar) {
 async function stopCalendarWatch(calendar, channelId, resourceId) {
   try {
     console.log('\n=== STOPPING CALENDAR WATCH ===\n');
-    
+
     await calendar.channels.stop({
       requestBody: {
         id: channelId,
@@ -183,7 +215,7 @@ async function listEvents() {
     // Set up calendar watch (COMMENTED OUT)
     // const watchData = await setupCalendarWatch(calendar);
     // console.log('Watch Data:', watchData);
-    
+
     console.log('\n\n\t\t-----------------------------\n\n');
 
     // Get the list of events
@@ -196,12 +228,12 @@ async function listEvents() {
     });
 
     const events = result.data.items;
-    
+
     if (!events || events.length === 0) {
       console.log('No upcoming events found.');
       return;
     }
-    
+
     // Find the first Google Meet event
     let meetEvent = null;
     for (const event of events) {
@@ -297,4 +329,10 @@ async function listEvents() {
   }
 }
 // listEvents();
-export { authenticateWithPlaywright, setupCalendarWatch, stopCalendarWatch, listEvents };
+export {
+  authenticateWithPlaywright,
+  setupCalendarWatch,
+  stopCalendarWatch,
+  listEvents,
+  authenticateWithRefreshToken,
+};

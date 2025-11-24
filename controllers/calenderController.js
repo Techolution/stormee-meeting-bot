@@ -1,4 +1,4 @@
-import { authenticateWithPlaywright, stopCalendarWatch } from '../services/integrations/calendarAPI.js';
+import { authenticateWithPlaywright, authenticateWithRefreshToken, stopCalendarWatch } from '../services/integrations/calendarAPI.js';
 import { scheduleMeeting, meetingQueue } from '../services/jobs/meetingSchedules.js';
 import { createInitialCalendarChannel } from '../services/jobs/channelIdCreationScheduler.js';
 // import fs from 'fs';
@@ -6,16 +6,16 @@ import { createInitialCalendarChannel } from '../services/jobs/channelIdCreation
 import {google} from 'googleapis';
 
 // Setup OAuth2 client (you'll need to pass this or create it here)
-const oauth2Client = new google.auth.OAuth2(
-  process.env.CLIENT_ID,
-  process.env.CLIENT_SECRET,
-  process.env.REDIRECT_URI
-);
+// const oauth2Client = new google.auth.OAuth2(
+//   process.env.CLIENT_ID,
+//   process.env.CLIENT_SECRET,
+//   process.env.REDIRECT_URI
+// );
 
-oauth2Client.setCredentials({
-  access_token: process.env.ACCESS_TOKEN,
-  refresh_token: process.env.REFRESH_TOKEN,
-});
+// oauth2Client.setCredentials({
+//   access_token: process.env.ACCESS_TOKEN,
+//   refresh_token: process.env.REFRESH_TOKEN,
+// });
 
 const calenderNotificationController = async (req, res) => {
   {
@@ -78,7 +78,8 @@ const calenderNotificationController = async (req, res) => {
       try {
         // Authenticate using the automated Playwright method
         console.log("Authenticating with Google...");
-        const { oauth2Client } = await authenticateWithPlaywright();
+        // const { oauth2Client } = await authenticateWithPlaywright();
+        const { oauth2Client } = await authenticateWithRefreshToken();
 
         // Create calendar client
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });

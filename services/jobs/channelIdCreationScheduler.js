@@ -1,6 +1,6 @@
 import { Queue, Worker, QueueEvents } from "bullmq";
 import { redisConnection } from "../../loaders/redis.loaders.js";
-import { authenticateWithPlaywright, setupCalendarWatch, stopCalendarWatch, } from "../integrations/calendarAPI.js";
+import { authenticateWithPlaywright, authenticateWithRefreshToken, setupCalendarWatch, stopCalendarWatch, } from "../integrations/calendarAPI.js";
 import { google } from "googleapis";
 
 // QUEUE SETUP
@@ -69,7 +69,8 @@ const calendarWorker = new Worker(
     console.log(`\n🔄 Renewing Calendar Channel...`);
     console.log(`📌 Old Channel: ${oldChannelId}`);
 
-    const { oauth2Client } = await authenticateWithPlaywright();
+    // const { oauth2Client } = await authenticateWithPlaywright();
+    const { oauth2Client } = await authenticateWithRefreshToken();
     const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
     // 1️⃣ Create new channel
