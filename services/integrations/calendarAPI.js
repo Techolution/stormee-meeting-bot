@@ -16,7 +16,7 @@ async function authenticateWithPlaywright() {
     token_uri: process.env.GOOGLE_TOKEN_URI,
     auth_provider_x509_cert_url: process.env.GOOGLE_AUTH_PROVIDER_CERT_URL,
     client_secret: process.env.GOOGLE_CLIENT_SECRET,
-    redirect_uris: [process.env.GOOGLE_REDIRECT_LOCAL_URI], 
+    redirect_uris: [process.env.BACKEND_URL], 
   },
 };
   const {client_secret, client_id, redirect_uris} = credentials.installed || credentials.web;
