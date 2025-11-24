@@ -1043,11 +1043,9 @@ async function ensureAuthSession(meetingUrl, asGuest = false) {
   browser = await chromium.launch({
     headless: true,
     args: [
-      "--disable-blink-features=AutomationControlled",
-      "--start-maximized",
-      "--use-fake-device-for-media-stream",
-      "--use-fake-ui-for-media-stream",
-    ],
+    '--no-sandbox',
+    '--disable-setuid-sandbox'
+  ],
   });
 
   // Hook into browser close to save audio if recording

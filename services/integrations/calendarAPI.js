@@ -43,11 +43,9 @@ async function authenticateWithPlaywright() {
   const browser = await chromium.launch({ 
     headless: true,
     args: [
-      "--disable-blink-features=AutomationControlled",
-      "--start-maximized",
-      "--use-fake-device-for-media-stream",
-      "--use-fake-ui-for-media-stream",
-    ],
+    '--no-sandbox',
+    '--disable-setuid-sandbox'
+  ],
     // slowMo: 100 // Slow down operations for better visibility
   });
   const context = await browser.newContext();
