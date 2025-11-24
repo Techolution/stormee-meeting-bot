@@ -41,7 +41,7 @@ async function authenticateWithPlaywright() {
 
   // Launch browser with Playwright
   const browser = await chromium.launch({ 
-    headless: false,
+    headless: true,
     slowMo: 100 // Slow down operations for better visibility
   });
   const context = await browser.newContext();

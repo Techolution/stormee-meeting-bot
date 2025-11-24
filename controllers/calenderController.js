@@ -1,8 +1,8 @@
 import { authenticateWithPlaywright, stopCalendarWatch } from '../services/integrations/calendarAPI.js';
 import { scheduleMeeting, meetingQueue } from '../services/jobs/meetingSchedules.js';
 import { createInitialCalendarChannel } from '../services/jobs/channelIdCreationScheduler.js';
-import fs from 'fs';
-import path from 'path';
+// import fs from 'fs';
+// import path from 'path';
 import {google} from 'googleapis';
 
 // Setup OAuth2 client (you'll need to pass this or create it here)
@@ -38,10 +38,10 @@ const calenderNotificationController = async (req, res) => {
     console.log("Resource URI:", resourceUri);
 
     // Create a logs directory if it doesn't exist
-    const logsDir = path.join(process.cwd(), "logs");
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir, { recursive: true });
-    }
+    // const logsDir = path.join(process.cwd(), "logs");
+    // if (!fs.existsSync(logsDir)) {
+    //   fs.mkdirSync(logsDir, { recursive: true });
+    // }
 
     // Prepare initial webhook data
     const webhookData = {
@@ -238,27 +238,27 @@ const calenderNotificationController = async (req, res) => {
     }
 
     // Write to file
-    const filepath = path.join(logsDir, "webhook-logs.json");
+    // const filepath = path.join(logsDir, "webhook-logs.json");
 
-    try {
-      let existingData = [];
+    // try {
+    //   let existingData = [];
 
-      // Read existing file if it exists
-      if (fs.existsSync(filepath)) {
-        const fileContent = fs.readFileSync(filepath, "utf-8");
-        existingData = JSON.parse(fileContent);
-      }
+    //   // Read existing file if it exists
+    //   if (fs.existsSync(filepath)) {
+    //     const fileContent = fs.readFileSync(filepath, "utf-8");
+    //     existingData = JSON.parse(fileContent);
+    //   }
 
-      // Append new webhook data
-      existingData.push(webhookData);
+    //   // Append new webhook data
+    //   existingData.push(webhookData);
 
-      // Write back to file
-      fs.writeFileSync(filepath, JSON.stringify(existingData, null, 2));
-      console.log(`\nWebhook data written to: ${filepath}`);
-      console.log(`Total webhooks logged: ${existingData.length}`);
-    } catch (error) {
-      console.error("Error writing webhook to file:", error);
-    }
+    //   // Write back to file
+    //   fs.writeFileSync(filepath, JSON.stringify(existingData, null, 2));
+    //   console.log(`\nWebhook data written to: ${filepath}`);
+    //   console.log(`Total webhooks logged: ${existingData.length}`);
+    // } catch (error) {
+    //   console.error("Error writing webhook to file:", error);
+    // }
   }
 };
 
