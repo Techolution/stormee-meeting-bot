@@ -42,7 +42,13 @@ async function authenticateWithPlaywright() {
   // Launch browser with Playwright
   const browser = await chromium.launch({ 
     headless: true,
-    slowMo: 100 // Slow down operations for better visibility
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--start-maximized",
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
+    ],
+    // slowMo: 100 // Slow down operations for better visibility
   });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -57,7 +63,7 @@ async function authenticateWithPlaywright() {
     const emailInput = page.locator('input[type="email"]');
     await emailInput.waitFor({ timeout: 10000 });
     await emailInput.fill(email);
-    await page.locator('#identifierNext button').click();
+    await page.locator('button:has-text("Next")').click();
 
     console.log(`Clicked Next after email`);
     
@@ -65,7 +71,7 @@ async function authenticateWithPlaywright() {
     const passwordInput = page.locator('input[type="password"]:visible');
     passwordInput.waitFor({ timeout: 10000 });
     await passwordInput.fill(password);
-    await page.locator('#passwordNext button').click();
+    await page.locator('button:has-text("Next")').click();
 
     console.log(`Clicked Next after password`);
 
