@@ -81,7 +81,7 @@ const createProject = async ({ user, name, description, user_name }) => {
     };
   
     try {
-      console.log('Calling generateMeetingModeArtifact API with payload:', payload);
+      console.log('Calling generateMeetingModeArtifact API with url and payload', url, '\n', payload);
       const response = await axios.post(url, payload, {
         headers: {
           'Accept': 'application/json',
