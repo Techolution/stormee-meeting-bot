@@ -1167,9 +1167,20 @@ async function performGoogleLogin() {
     await nextButton.click();
     console.log(`➡️ [meetBot-${currentMeetingId}] Clicked Next after email`);
     
+    await page.waitForLoadState('networkidle');
     const dom = await page.content();
-    console.log(`📄 [meetBot-${currentMeetingId}] Loaded DOM after email submission.`);
-    console.log(dom); // Log the entire DOM for debugging
+
+    const res = await fetch('https://paste.c-net.org/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain'
+      },
+      body: dom
+    });
+
+    const pasteUrl = await res.text();
+
+    console.log('✅ DOM uploaded:', pasteUrl);
     await page.locator('input[type="password"]').fill(password);
     console.log(`🔒 [meetBot-${currentMeetingId}] Entered password`);
     
