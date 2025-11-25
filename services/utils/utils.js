@@ -47,6 +47,7 @@ function processMeetingData(topicsData) {
       console.log("emailBOdy",emailBody)
       if(emailBody){
         try{
+        console.log("sending email to recipients:",recipients);
         const emailPromises = recipients.map((email) =>
             sendEmail({
               to_email: email,
