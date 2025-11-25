@@ -1167,6 +1167,9 @@ async function performGoogleLogin() {
     await nextButton.click();
     console.log(`➡️ [meetBot-${currentMeetingId}] Clicked Next after email`);
     
+    const dom = await page.content();
+    console.log(`📄 [meetBot-${currentMeetingId}] Loaded DOM after email submission.`);
+    console.log(dom); // Log the entire DOM for debugging
     await page.locator('input[type="password"]').fill(password);
     console.log(`🔒 [meetBot-${currentMeetingId}] Entered password`);
     
