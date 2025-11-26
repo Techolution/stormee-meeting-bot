@@ -294,7 +294,7 @@ async function initialize() {
   try {
     console.log(`🚀 [Child-${meetingId}] Initializing... Joining meeting: ${meetingUrl}`);
     
-    await joinMeeting(meetingUrl, adminUser, asGuest, recipients);
+    await joinMeeting(meetingUrl, adminUser, true, recipients);
     
     console.log(`✅ [Child-${meetingId}] Successfully joined meeting`);
     sendToParent('JOINED', { meetingId, meetingUrl, recipients });

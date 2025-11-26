@@ -1041,7 +1041,7 @@ async function ensureAuthSession(meetingUrl, asGuest = false) {
   console.log(`🔐 [meetBot-${currentMeetingId}] Ensuring authentication session...`);
 
   browser = await chromium.launch({
-    headless: true,
+    headless: false,
     args: [
       "--disable-blink-features=AutomationControlled",
       "--start-maximized",
@@ -1091,12 +1091,12 @@ async function ensureAuthSession(meetingUrl, asGuest = false) {
     };
   });
 
-  if (!fs.existsSync(AUTH_PATH)) {
-    console.log(`🔑 [meetBot-${currentMeetingId}] No stored authentication found. Performing Google login...`);
-    await performGoogleLogin();
-    await context.storageState({ path: AUTH_PATH });
-    console.log(`✅ [meetBot-${currentMeetingId}] Login successful. Saved session.`);
-  }
+  // if (!fs.existsSync(AUTH_PATH)) {
+  //   console.log(`🔑 [meetBot-${currentMeetingId}] No stored authentication found. Performing Google login...`);
+  //   await performGoogleLogin();
+  //   await context.storageState({ path: AUTH_PATH });
+  //   console.log(`✅ [meetBot-${currentMeetingId}] Login successful. Saved session.`);
+  // }
 
   await page.goto(meetingUrl);
   console.log(asGuest ? `✅ [meetBot-${currentMeetingId}] Joining as guest.` : `✅ [meetBot-${currentMeetingId}] Using existing auth session.`);
@@ -1197,7 +1197,7 @@ async function performGoogleLogin() {
   }
 }
 
-async function joinMeeting(meetingUrl, adminuser = {}, asGuest = false, recipients=[]) {
+async function joinMeeting(meetingUrl, adminuser = {}, asGuest = true, recipients=[]) {
   // Set currentMeetingId from environment variable (passed by parent process)
   currentMeetingId = process.env.MEETING_ID;
   
@@ -1222,7 +1222,7 @@ async function joinMeeting(meetingUrl, adminuser = {}, asGuest = false, recipien
   await ensureAuthSession(meetingUrl, asGuest);
   await page.waitForLoadState('networkidle');
 
-  const guestName = process.env.USER_NAME || "Stormee.Ai";
+  const guestName = "Stormee.Ai";
 
   if (asGuest) {
     try {

@@ -10,3 +10,4 @@ webhook-logs
 credentials.json
 *.wav
 auth.json
+token.json

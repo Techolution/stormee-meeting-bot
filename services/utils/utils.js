@@ -24,7 +24,10 @@ function processMeetingData(topicsData) {
   const createArtifactAndSendEmail = async (artifactData,projectId, recipients=[]) => {
     const artifactJson=artifactData.artifact_upload_result.artifact_data.artifactData;
     // console.log("artifactJson",artifactJson);
-    if(!artifactJson)return;
+    if (!artifactJson) {
+      console.error("No artifact data found");
+      return;
+    }
     const tasks=artifactJson.itemListJson.formatted_action_items;
     const description= artifactJson.transcriptJson.diarization_json.audioDescription;
     const audioFileName=artifactJson.transcriptJson.diarization_json.audio_filename;
@@ -33,7 +36,8 @@ function processMeetingData(topicsData) {
     console.log("description:", description);
     console.log("audioFileName:", audioFileName);
     console.log("meetingData:", meetingData);
-    if(description&&audioFileName&&tasks.length>0&&meetingData){
+
+    if (description && audioFileName && tasks.length>0 && meetingData){
       console.log('all data present');
       const emailBody = await generateMeetingMinutesEmailInMOMScreen(
         meetingData,
@@ -66,7 +70,6 @@ function processMeetingData(topicsData) {
             }
           });
     // const response=await sendEmail({to_email:process.env.USER_EMAIL,subject:`Meeting Minutes for ${audioFileName}`,body:emailBody});
-    
     // console.log(responses);
     }
     catch(error){
