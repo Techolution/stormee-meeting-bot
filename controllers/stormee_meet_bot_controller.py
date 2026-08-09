@@ -159,3 +159,12 @@ async def stop_chat_scraping_controller():
     except Exception as err:
         print(f"Error stopping chat scraping: {err}")
         raise HTTPException(status_code=500, detail="Failed to stop chat scraping")
+
+async def exit_meeting_controller():
+    """Exit the meeting"""
+    try:
+        await meet_bot.leave_meeting()
+        return JSONResponse(content={"message": "Exited the meeting"})
+    except Exception as err:
+        print(f"Error exiting the meeting: {err}")
+        raise HTTPException(status_code=500, detail="Failed to exit the meeting")

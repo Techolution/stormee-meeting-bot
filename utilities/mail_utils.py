@@ -1,0 +1,286 @@
+import logging
+import httpx
+
+
+class EmailGenerator:
+    def __init__(self):
+        self.brand_purple = "#5634E1"
+        self.btn_green = "#22C55E"
+        self.btn_red = "#EF4444"
+        self.backend_url = "https://dev.appmod.ai"
+
+    def generate_meeting_transcript_uploaded_email(
+        self,
+        user_name: str,
+        user_email: str,
+        project_name: str,
+        project_url: str,
+        transcript_name: str,
+    ):
+        """
+        Generates an email notification when a meeting transcript
+        has been uploaded to a project.
+
+        Returns:
+            tuple: (subject, html_body)
+        """
+
+        subject = f"Meeting Transcript Uploaded: {transcript_name}"
+        user_initial = (user_name[:1] or "U").upper()
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="
+            background: #fff;
+            font-family: Arial, sans-serif;
+            max-width: 680px;
+            margin: 0 auto;
+            padding: 20px 0;
+        ">
+            <div style="
+                text-align: center;
+                padding: 32px 40px 0;
+                border: 1px solid #e8e8e8;
+                border-radius: 8px;
+                margin: 0 20px;
+            ">
+
+                <div style="
+                    color: #2563eb;
+                    font-size: 13px;
+                    font-weight: 500;
+                    margin-bottom: 8px;
+                    letter-spacing: 0.3px;
+                ">
+                    Meeting Transcript
+                </div>
+
+                <div style="
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: #111;
+                    margin-bottom: 10px;
+                ">
+                    Meeting Transcript Uploaded
+                </div>
+
+                <div style="
+                    text-align: center;
+                    font-size: 20px;
+                    color: #333;
+                    margin-bottom: 24px;
+                ">
+                    <strong>{transcript_name}</strong>
+                </div>
+
+                <div style="
+                    text-align: left;
+                    margin-bottom: 28px;
+                ">
+
+                    <div style="
+                        font-size: 14px;
+                        color: #333;
+                        margin-bottom: 16px;
+                    ">
+                        Hello
+                        <span style="
+                            color: #1a73e8;
+                            font-weight: 600;
+                        ">
+                            {user_name}
+                        </span>,
+                    </div>
+
+                    <div style="
+                        background: #f0f7ff;
+                        border-left: 4px solid #2563eb;
+                        border-radius: 4px;
+                        padding: 16px 18px;
+                    ">
+
+                        <div style="
+                            font-size: 14px;
+                            color: #333;
+                            margin-bottom: 10px;
+                        ">
+                            <span style="
+                                display: inline-block;
+                                width: 28px;
+                                height: 28px;
+                                line-height: 28px;
+                                text-align: center;
+                                border-radius: 50%;
+                                background: #dbeafe;
+                                color: #1d4ed8;
+                                font-weight: 600;
+                                margin-right: 8px;
+                                vertical-align: middle;
+                            ">
+                                {user_initial}
+                            </span>
+
+                            <span style="vertical-align: middle;">
+                                Your meeting transcript
+                                <strong>{transcript_name}</strong>
+                                has been successfully uploaded to the project
+                                <strong>{project_name}</strong>.
+                            </span>
+                        </div>
+
+                        <div style="
+                            font-size: 14px;
+                            color: #555;
+                            margin-top: 8px;
+                            line-height: 1.5;
+                        ">
+                            You can open the project to review the transcript
+                            and continue working with the meeting content.
+                        </div>
+
+                    </div>
+                </div>
+
+                <div style="
+                    text-align: center;
+                    margin-bottom: 28px;
+                ">
+                    <a href="{project_url}" style="
+                        display: inline-block;
+                        background: #2563eb;
+                        color: #fff;
+                        border-radius: 6px;
+                        padding: 13px 48px;
+                        font-size: 15px;
+                        font-weight: 600;
+                        text-decoration: none;
+                    ">
+                        Open Project
+                    </a>
+                </div>
+
+                <div style="
+                    font-size: 12px;
+                    color: #777;
+                    margin-bottom: 28px;
+                    line-height: 1.6;
+                ">
+                    The meeting transcript is now available in your project.
+                    You can open the project using the button above.
+                </div>
+
+                <div style="
+                    border-top: 1px solid #e8e8e8;
+                    padding: 16px 0;
+                    font-size: 11px;
+                    color: #aaa;
+                ">
+                    This is an automated notification. © 2026 Techolution
+                </div>
+
+            </div>
+        </body>
+        </html>
+        """
+
+        return subject, html
+
+
+class EmailSender:
+    def __init__(self):
+        self.backend_url = "https://dev.appmod.ai"
+
+    async def send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        cc: str = "",
+    ):
+        """
+        Sends an email through the backend email service.
+        """
+
+        payload = {
+            "to_email": to_email,
+            "subject": subject,
+            "body": body,
+            "cc": cc,
+        }
+
+        endpoint = f"{self.backend_url}/backend/utility/cw-email"
+
+        print(
+            f"Sending email to={to_email}, cc={cc}, subject={subject}"
+        )
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                endpoint,
+                json=payload,
+            )
+
+        if response.status_code == 200:
+            print(
+                f"Meeting transcript email sent successfully to={to_email}"
+            )
+        else:
+            logging.error(
+                f"Meeting transcript email failed "
+                f"to={to_email} with status={response.status_code}, "
+                f"response={response.text}"
+            )
+
+        return response
+
+    async def send_meeting_transcript_uploaded_email(
+        self,
+        user_name: str,
+        user_email: str,
+        project_name: str,
+        project_url: str,
+        transcript_name: str,
+    ):
+        """
+        Sends meeting transcript uploaded notification to the user.
+        """
+
+        print(
+            f"Preparing meeting transcript notification "
+            f"for user={user_email}, transcript={transcript_name}"
+        )
+
+        generator = EmailGenerator()
+
+        subject, html_body = (
+            generator.generate_meeting_transcript_uploaded_email(
+                user_name=user_name,
+                user_email=user_email,
+                project_name=project_name,
+                project_url=project_url,
+                transcript_name=transcript_name,
+            )
+        )
+
+        return await self.send_email(
+            to_email=user_email,
+            subject=subject,
+            body=html_body,
+        )
+
+email_sender = EmailSender()
+
+# if __name__ == "__main__":
+#     import asyncio
+
+#     async def test_email():
+#         sender = EmailSender()
+#         await sender.send_meeting_transcript_uploaded_email(
+#             user_name="John Doe",
+#             user_email="swikrit.shukla@techolution.com",
+#             project_name="Project Alpha",
+#             project_url="https://dev.appmod.ai/projects/12345",
+#             transcript_name="Meeting Transcript 2026-06-15",
+#         )
+#     asyncio.run(test_email())

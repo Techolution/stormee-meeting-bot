@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from controllers.stormee_meet_bot_controller import (
+    exit_meeting_controller,
     login_controller,
     start_captions_controller,
     stop_captions_controller,
@@ -181,3 +182,16 @@ async def stop_chat_scraping():
         500: Failed to stop chat scraping
     """
     return await stop_chat_scraping_controller()
+
+@router.post("/exit", tags=["Meeting Control"], summary="Exit the Google Meet meeting")
+async def exit_meeting():
+    """
+    Exit the Google Meet meeting
+    
+    Returns:
+        message: Meeting exited successfully
+    
+    Raises:
+        500: Failed to exit meeting
+    """
+    return await exit_meeting_controller()

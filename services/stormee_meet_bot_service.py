@@ -7,9 +7,16 @@ from typing import List, Dict, Optional
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import socketio
 from dotenv import load_dotenv
+
+from utilities.doc_utils import save_captions_to_docx
+from utilities.cw_utils import cw_caller
+from utilities.mail_utils import email_sender
+
 load_dotenv()
 
 PROFILE_DIR = Path("chrome_profile")
+project_id = os.getenv("PROJECT_ID", "6a78bbb3dfeb370713b22c8d")  
+project_name = os.getenv("PROJECT_NAME", "MeetBot Test")
 
 class MeetBot:
     def __init__(self):
@@ -421,10 +428,11 @@ class MeetBot:
         # Start post-admission services
         await self.start_chat_scraping()
         print(f"🎥 Joined meeting using {self.browser_type}")
-        
+        await self.start_captions()
+
         self.participant_count = await self.get_participant_count()
         await self.start_participant_monitoring()
-        print(f"Participant count: {self.participant_count}")
+        print(f"Participant count: {self.participant_count}")       
 
     async def dismiss_sign_in_popup(self):
         """Dismisses the 'Sign in with your Google account' popup modal in Google Meet."""
@@ -1004,36 +1012,102 @@ class MeetBot:
                 pass
 
     async def leave_meeting(self):
-        """Leave meeting"""
-        if not self.page:
+        """Safely leaves the meeting room and closes browser contexts."""
+        if not self.page or self.page.is_closed():
+            print("⚠️ Page is already closed.")
             return
-        
-        print("🚪 Leaving meeting")
-        
+
+        print("🚪 Leaving meeting...")
+
         try:
-            await self.stop_chat_scraping()
-            await self.stop_audio_recording()
-            await self.stop_captions()
-            await self.stop_participant_monitoring()
-            
-            leave_button = self.page.locator('[aria-label="Leave call"], button:has-text("Leave call")').first
-            if await leave_button.count() > 0:
-                await leave_button.click()
-            
-            if self.context:
-                await self.context.close()
-            if self.browser:
-                await self.browser.close()
-            if self.playwright:
-                await self.playwright.stop()
-            
+            # 1. Stop background scraping tasks gracefully
+            for task_fn in [
+                self.stop_chat_scraping,
+                self.stop_audio_recording,
+                self.stop_captions,
+                self.stop_participant_monitoring,
+            ]:
+                try:
+                    if callable(task_fn):
+                        await task_fn()
+                except Exception as task_err:
+                    print(f"⚠️ Non-fatal error stopping background task: {task_err}")
+
+            try:
+                filename = await save_captions_to_docx(captions_segments=self.captions_segments)
+                if filename:
+                    response_json = await cw_caller.upload_file(
+                        file_path=filename,
+                        project_id=project_id,
+                        display_name="Meeting Chat"
+                    )
+                    if len(response_json.get("uploaded")) > 0:
+                        print(f"✅ Captions uploaded to CW: {response_json['uploaded'][0].get('fileId')}")
+                        cleanup_path = Path(filename)
+                        if cleanup_path.exists():
+                            cleanup_path.unlink()
+                            print(f"🗑️ Deleted local file: {cleanup_path}")
+                        await email_sender.send_meeting_transcript_uploaded_email(
+                                    user_name="Swikrit Shukla",
+                                    user_email="swikrit.shukla@techolution.com",
+                                    project_name=project_name,
+                                    project_url=f"https://dev.appmod.ai/mode/Project%20Mode/projects/{project_id}",
+                                    transcript_name="Meeting Transcript 2026-06-15",
+                                )
+            except Exception as docx_err:
+                print(f"⚠️ Failed to save captions to DOCX: {docx_err}")
+            # 2. Wake up hidden bottom control bar by wiggling mouse
+            try:
+                await self.page.mouse.move(200, 200)
+                await asyncio.sleep(0.5)
+            except Exception:
+                pass
+
+            # 3. Target Leave Button using jsname="CQylAd" or wildcard aria-label
+            print("🖱️ Clicking Leave call button...")
+            leave_clicked = await self.page.evaluate("""
+                () => {
+                    const btn = document.querySelector('[aria-label*="Leave call" i]') ||
+                                document.querySelector('[aria-label*="End call" i]');
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                }
+            """)
+
+            if not leave_clicked:
+                # Playwright Force Click Fallback
+                leave_button = self.page.locator(
+                    'button[aria-label*="Leave call" i]'
+                ).first
+                if await leave_button.count() > 0:
+                    await leave_button.click(force=True)
+
+            print("👋 Successfully clicked Leave Call.")
+            await asyncio.sleep(1.5)
+
+        except Exception as e:
+            print(f"⚠️ Error clicking leave button: {e}")
+
+        # 4. Clean up Playwright Contexts safely
+        finally:
+            try:
+                if self.page and not self.page.is_closed():
+                    await self.page.close()
+                if self.context:
+                    await self.context.close()
+                if hasattr(self, "playwright") and self.playwright:
+                    await self.playwright.stop()
+            except Exception as cleanup_err:
+                print(f"⚠️ Cleanup warning: {cleanup_err}")
+
+            # Reset state variables
             self.page = None
             self.context = None
             self.browser = None
-            
-            print("✅ Left meeting")
-        except Exception as e:
-            print(f"Error leaving: {e}")
+            print("✅ Left meeting and cleaned up browser resources.")
 
 # Global instance
 meet_bot = MeetBot()
