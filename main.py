@@ -10,6 +10,21 @@ from routes.stormee_meet_bot_routes import router as meet_router
 # Load environment variables
 load_dotenv()
 
+# Configure centralized logging
+from utilities.logging_config import configure_logging
+from utilities.env_config import config
+
+# Configure logging and validate all environment variables
+# LOG_LEVEL is optional, so we safely get it
+log_level = None
+try:
+    log_level = config.get('LOG_LEVEL')
+except ValueError:
+    pass  # LOG_LEVEL is optional
+
+configure_logging(log_level=log_level)
+config.validate()
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Meet API",

@@ -1,5 +1,9 @@
 import logging
 import httpx
+from utilities.env_config import config
+
+# Get module-level logger
+logger = logging.getLogger(__name__)
 
 
 class EmailGenerator:
@@ -7,7 +11,12 @@ class EmailGenerator:
         self.brand_purple = "#5634E1"
         self.btn_green = "#22C55E"
         self.btn_red = "#EF4444"
-        self.backend_url = "https://dev.appmod.ai"
+        # BACKEND_URL is required to be set via environment variable
+        try:
+            self.backend_url = config.get('BACKEND_URL')
+        except ValueError:
+            logger.error("BACKEND_URL environment variable not set")
+            raise
 
     def generate_meeting_transcript_uploaded_email(
         self,
@@ -211,7 +220,7 @@ class EmailSender:
 
         endpoint = f"{self.backend_url}/backend/utility/cw-email"
 
-        print(
+        logger.info(
             f"Sending email to={to_email}, cc={cc}, subject={subject}"
         )
 
@@ -222,7 +231,7 @@ class EmailSender:
             )
 
         if response.status_code == 200:
-            print(
+            logger.info(
                 f"Meeting transcript email sent successfully to={to_email}"
             )
         else:
@@ -246,7 +255,7 @@ class EmailSender:
         Sends meeting transcript uploaded notification to the user.
         """
 
-        print(
+        logger.info(
             f"Preparing meeting transcript notification "
             f"for user={user_email}, transcript={transcript_name}"
         )

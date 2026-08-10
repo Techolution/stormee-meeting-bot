@@ -1,4 +1,7 @@
-from fastapi import APIRouter
+import time
+import uuid
+from fastapi import APIRouter, Request, Depends
+from utilities.logging_context import RequestContext
 from controllers.stormee_meet_bot_controller import (
     exit_meeting_controller,
     login_controller,
@@ -19,6 +22,40 @@ from controllers.stormee_meet_bot_controller import (
 router = APIRouter()
 
 
+async def extract_context(request: Request) -> None:
+    """Dependency function to extract and set request context.
+
+    This function extracts the request URL, generates a unique request_id,
+    initializes a timer, and attempts to extract meetingId from the request body.
+    The context is then set via RequestContext.set_context().
+
+    Args:
+        request: FastAPI Request object containing request metadata and body.
+    """
+    request_url = str(request.url.path)
+    request_id = str(uuid.uuid4())
+    timer = time.time()
+    meeting_id = ''
+
+    # Attempt to extract meetingId from request body
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            # Try both 'meetingId' and 'meetingUrl' fields
+            meeting_id = body.get('meetingId', body.get('meetingUrl', ''))
+    except Exception:
+        # If request body cannot be parsed, continue with empty meetingId
+        pass
+
+    # Set the context
+    RequestContext.set_context(
+        request_id=request_id,
+        timer=timer,
+        meetingId=meeting_id,
+        request_url=request_url
+    )
+
+
 @router.get("/health", tags=["Utility"], summary="Health check")
 async def health_check():
     """
@@ -32,7 +69,7 @@ async def health_check():
 
 
 @router.post("/signin", tags=["Meeting Control"], summary="Join a Google Meet meeting")
-async def signin(request: MeetingUrlRequest):
+async def signin(request: MeetingUrlRequest, _: None = Depends(extract_context)):
     """
     Join a Google Meet meeting
     
@@ -50,7 +87,7 @@ async def signin(request: MeetingUrlRequest):
 
 
 @router.post("/start", tags=["Captions"], summary="Start scraping captions/transcript")
-async def start_captions(request: MeetingUrlRequest):
+async def start_captions(request: MeetingUrlRequest, _: None = Depends(extract_context)):
     """
     Start scraping captions/transcript
     
@@ -68,7 +105,7 @@ async def start_captions(request: MeetingUrlRequest):
 
 
 @router.post("/stop", tags=["Captions"], summary="Stop captions scraping and return the full transcript")
-async def stop_captions(request: MeetingActionRequest):
+async def stop_captions(request: MeetingActionRequest, _: None = Depends(extract_context)):
     """
     Stop captions scraping and return the full transcript
     
@@ -83,7 +120,7 @@ async def stop_captions(request: MeetingActionRequest):
 
 
 @router.post("/audio", tags=["Meeting Control"], summary="Turn on the bot's microphone")
-async def enable_audio(request: MeetingActionRequest):
+async def enable_audio(request: MeetingActionRequest, _: None = Depends(extract_context)):
     """
     Turn on the bot's microphone
     
@@ -98,7 +135,7 @@ async def enable_audio(request: MeetingActionRequest):
 
 
 @router.post("/pauseaudio", tags=["Meeting Control"], summary="Mute the bot's microphone")
-async def disable_audio(request: MeetingActionRequest):
+async def disable_audio(request: MeetingActionRequest, _: None = Depends(extract_context)):
     """
     Mute the bot's microphone
     
@@ -112,7 +149,7 @@ async def disable_audio(request: MeetingActionRequest):
 
 
 @router.post("/record/start", tags=["Recording"], summary="Start recording and streaming the full meeting audio")
-async def start_recording(request: RecordingRequest):
+async def start_recording(request: RecordingRequest, _: None = Depends(extract_context)):
     """
     Start recording and streaming the full meeting audio
     
@@ -131,7 +168,7 @@ async def start_recording(request: RecordingRequest):
 
 
 @router.post("/record/stop", tags=["Recording"], summary="Stop recording, save, and convert the audio file")
-async def stop_recording(request: RecordingRequest):
+async def stop_recording(request: RecordingRequest, _: None = Depends(extract_context)):
     """
     Stop recording, save, and convert the audio file
     
@@ -157,7 +194,7 @@ async def get_recording_status():
 
 
 @router.post("/chat/start", tags=["Chat"], summary="Start scraping and monitoring the meeting chat")
-async def start_chat_scraping(request: MeetingActionRequest):
+async def start_chat_scraping(request: MeetingActionRequest, _: None = Depends(extract_context)):
     """
     Start scraping and monitoring the meeting chat
     
@@ -171,7 +208,7 @@ async def start_chat_scraping(request: MeetingActionRequest):
 
 
 @router.post("/chat/stop", tags=["Chat"], summary="Stop chat scraping and return collected chat segments")
-async def stop_chat_scraping(request: MeetingActionRequest):
+async def stop_chat_scraping(request: MeetingActionRequest, _: None = Depends(extract_context)):
     """
     Stop chat scraping and return collected chat segments
     
@@ -185,7 +222,7 @@ async def stop_chat_scraping(request: MeetingActionRequest):
     return await stop_chat_scraping_controller(request)
 
 @router.post("/exit", tags=["Meeting Control"], summary="Exit the Google Meet meeting")
-async def exit_meeting(request: MeetingActionRequest):
+async def exit_meeting(request: MeetingActionRequest, _: None = Depends(extract_context)):
     """
     Exit the Google Meet meeting
     

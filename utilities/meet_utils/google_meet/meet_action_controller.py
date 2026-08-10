@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import re
 from typing import Optional
 from playwright.async_api import Page, ElementHandle
 
+logger = logging.getLogger(__name__)
 
 class ActionController:
     """Utility class to encapsulate DOM interactions, wiggles, clicks, and state checks."""
@@ -37,7 +39,7 @@ class ActionController:
             await locator.click(force=force)
             return True
         except Exception as e:
-            print(f"⚠️ Click failed on '{selector}': {e}")
+            logger.warning(f"Click failed on '{selector}': {e}")
             return False
 
     async def fill_input_natively(self, selector: str, text: str) -> bool:
@@ -73,7 +75,7 @@ class ActionController:
             )
             return True
         except Exception as e:
-            print(f"❌ Error typing into '{selector}': {e}")
+            logger.warning(f"Error typing into '{selector}': {e}")
             return False
 
     async def _set_device_state(
@@ -125,18 +127,18 @@ class ActionController:
                         )
 
                         if currently_enabled == enabled:
-                            print(
-                                f"✅ {device.capitalize()} already "
-                                f"{'enabled' if enabled else 'disabled'}."
+                            logger.debug(
+                                f"{device.capitalize()} already "
+                                f"{'enabled' if enabled else 'disabled'}"
                             )
                             return True
 
                         # -------------------------------------------------
                         # 2. Click the UI button
                         # -------------------------------------------------
-                        print(
-                            f"🖱️ Clicking {device} button "
-                            f"to {'enable' if enabled else 'disable'}..."
+                        logger.debug(
+                            f"Clicking {device} button "
+                            f"to {'enable' if enabled else 'disable'}"
                         )
 
                         await button.click()
@@ -157,35 +159,35 @@ class ActionController:
                             timeout=3000,
                         )
 
-                        print(
-                            f"✅ {device.capitalize()} "
-                            f"{'enabled' if enabled else 'disabled'}."
+                        logger.info(
+                            f"{device.capitalize()} "
+                            f"{'enabled' if enabled else 'disabled'} via UI button"
                         )
                         return True
 
                 except Exception as e:
-                    print(
-                        f"⚠️ UI interaction failed for {device}: {e}"
+                    logger.warning(
+                        f"UI interaction failed for {device}: {e}"
                     )
 
             else:
-                print(
-                    f"⚠️ Could not find {device} button. "
+                logger.debug(
+                    f"Could not find {device} button. "
                     f"Trying keyboard shortcut..."
                 )
 
         except Exception as e:
-            print(
-                f"⚠️ Error locating/interacting with {device}: {e}"
+            logger.debug(
+                f"Error locating/interacting with {device}: {e}"
             )
 
         # =============================================================
         # 4. Keyboard shortcut fallback
         # =============================================================
         try:
-            print(
-                f"⌨️ Trying keyboard shortcut "
-                f"'{keyboard_shortcut}' for {device}..."
+            logger.debug(
+                f"Trying keyboard shortcut "
+                f"'{keyboard_shortcut}' for {device}"
             )
 
             await self.page.keyboard.press(keyboard_shortcut)
@@ -206,17 +208,17 @@ class ActionController:
                 timeout=3000,
             )
 
-            print(
-                f"✅ {device.capitalize()} "
+            logger.info(
+                f"{device.capitalize()} "
                 f"{'enabled' if enabled else 'disabled'} "
-                f"using keyboard shortcut."
+                f"via keyboard shortcut"
             )
 
             return True
 
         except Exception as e:
-            print(
-                f"❌ Failed to set {device} state using "
+            logger.error(
+                f"Failed to set {device} state using "
                 f"keyboard shortcut '{keyboard_shortcut}': {e}"
             )
             return False
@@ -244,11 +246,18 @@ class ActionController:
         except:
             return False
 
-    async def click_join_meet_button(self)-> bool:
-        join_button = self.page.locator('button:has-text("Join now")')
-        switch_here_button = self.page.locator('button:has-text("Switch here")')
-        if await join_button.count() == 0 and await switch_here_button.count() > 0:
-            join_button = switch_here_button
-        await join_button.wait_for(timeout=10000)
-        await join_button.click()
-        print("🚀 Clicked 'Join now'")
+    async def click_join_meet_button(self) -> bool:
+        """Click the 'Join now' or 'Switch here' button."""
+        try:
+            join_button = self.page.locator('button:has-text("Join now")')
+            switch_here_button = self.page.locator('button:has-text("Switch here")')
+            if await join_button.count() == 0 and await switch_here_button.count() > 0:
+                join_button = switch_here_button
+                logger.debug("Using 'Switch here' button instead of 'Join now'")
+            await join_button.wait_for(timeout=10000)
+            await join_button.click()
+            logger.info("Successfully clicked 'Join now' button")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to click 'Join now' button: {e}")
+            return False

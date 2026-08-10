@@ -1,7 +1,12 @@
+import logging
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
+from utilities.error_handler import log_exception
+
+# Get module-level logger
+logger = logging.getLogger(__name__)
 
 from services.stormee_meet_bot_service import (
     create_bot_for,
@@ -31,9 +36,17 @@ async def login_controller(request: MeetingUrlRequest):
     try:
         meeting_url = request.meetingUrl
         meeting_id = request.meetingId
+        
+        logger.debug(
+            f"Login request received [meeting_id={meeting_id}, "
+            f"user_name={request.userName}, user_email={request.userEmail}]"
+        )
+        
         if not meeting_url:
+            logger.warning(f"Login validation failed for meeting {meeting_id}: meetingUrl is required")
             raise HTTPException(status_code=400, detail="meetingUrl is required")
         if not meeting_id:
+            logger.warning("Login validation failed: meetingId is required")
             raise HTTPException(status_code=400, detail="meetingId is required")
 
         # Create bot and start join in background
@@ -47,12 +60,20 @@ async def login_controller(request: MeetingUrlRequest):
             meeting_title=request.meetingTitle,
         )
 
-        print(f"Started join for meeting {meeting_id}")
+        logger.info(f"Meeting join initialized for {meeting_id}")
         return JSONResponse(content={"message": "Meeting join started", "meetingId": meeting_id})
     except HTTPException:
         raise
     except Exception as err:
-        print(f"Error joining meeting: {err}")
+        context = {
+            'meeting_id': request.meetingId,
+            'user_email': request.userEmail,
+            'user_name': request.userName,
+        }
+        logger.error(
+            f"Failed to initiate meeting join for {request.meetingId}"
+        )
+        log_exception(logger, logging.ERROR, "Meeting join initialization failed", err, context)
         raise HTTPException(status_code=500, detail="Failed to join meeting")
 
 
@@ -69,12 +90,12 @@ async def start_captions_controller(request: MeetingActionRequest):
 
         import asyncio
         asyncio.create_task(bot.start_captions())
-        print(f"Captions started for {meeting_id}")
+        logger.info(f"Captions started for {meeting_id}")
         return JSONResponse(content={"message": "Captions started", "meetingId": meeting_id})
     except HTTPException:
         raise
     except Exception as err:
-        print(f"Error starting captions: {err}")
+        logger.error(f"Error starting captions: {err}")
         raise HTTPException(status_code=500, detail="Failed to start captions")
 
 
@@ -93,7 +114,7 @@ async def stop_captions_controller(request: MeetingActionRequest):
             "meetingId": meeting_id
         })
     except Exception as err:
-        print(f"Error stopping captions: {err}")
+        logger.error(f"Error stopping captions: {err}")
         raise HTTPException(status_code=500, detail="Failed to stop captions")
 
 
@@ -110,7 +131,7 @@ async def start_audio_controller(request: MeetingActionRequest):
     except HTTPException:
         raise
     except Exception as err:
-        print(f"Error playing audio: {err}")
+        logger.error(f"Error playing audio: {err}")
         raise HTTPException(status_code=500, detail="Failed to play audio")
 
 
@@ -125,7 +146,7 @@ async def stop_audio_controller(request: MeetingActionRequest):
         await bot.pause_audio()
         return JSONResponse(content={"message": "Audio paused", "meetingId": meeting_id})
     except Exception as err:
-        print(f"Error pausing audio: {err}")
+        logger.error(f"Error pausing audio: {err}")
         raise HTTPException(status_code=500, detail="Failed to pause audio")
 
 
@@ -148,7 +169,7 @@ async def start_recording_controller(request: RecordingRequest):
     except HTTPException:
         raise
     except Exception as err:
-        print(f"Error starting audio recording: {err}")
+        logger.error(f"Error starting audio recording: {err}")
         raise HTTPException(status_code=500, detail="Failed to start audio recording")
 
 
@@ -163,7 +184,7 @@ async def stop_recording_controller(request: RecordingRequest):
         await bot.stop_audio_recording()
         return JSONResponse(content={"message": "Audio recording stopped", "meetingId": meeting_id})
     except Exception as err:
-        print(f"Error stopping audio recording: {err}")
+        logger.error(f"Error stopping audio recording: {err}")
         raise HTTPException(status_code=500, detail="Failed to stop audio recording")
 
 
@@ -187,7 +208,7 @@ async def start_chat_scraping_controller(request: MeetingActionRequest):
         asyncio.create_task(bot.start_chat_scraping())
         return JSONResponse(content={"message": "Chat scraping started", "meetingId": meeting_id})
     except Exception as err:
-        print(f"Error starting chat scraping: {err}")
+        logger.error(f"Error starting chat scraping: {err}")
         raise HTTPException(status_code=500, detail="Failed to start chat scraping")
 
 
@@ -206,7 +227,7 @@ async def stop_chat_scraping_controller(request: MeetingActionRequest):
             "meetingId": meeting_id
         })
     except Exception as err:
-        print(f"Error stopping chat scraping: {err}")
+        logger.error(f"Error stopping chat scraping: {err}")
         raise HTTPException(status_code=500, detail="Failed to stop chat scraping")
 
 async def exit_meeting_controller(request: MeetingActionRequest):
@@ -216,5 +237,5 @@ async def exit_meeting_controller(request: MeetingActionRequest):
         await remove_bot(meeting_id)
         return JSONResponse(content={"message": "Exited the meeting", "meetingId": meeting_id})
     except Exception as err:
-        print(f"Error exiting the meeting: {err}")
+        logger.error(f"Error exiting the meeting: {err}")
         raise HTTPException(status_code=500, detail="Failed to exit the meeting")

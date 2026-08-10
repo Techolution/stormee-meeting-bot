@@ -1,5 +1,6 @@
 import asyncio
 import os
+import logging
 import platform
 from pathlib import Path
 from datetime import datetime
@@ -9,16 +10,27 @@ import socketio
 from dotenv import load_dotenv
 import re
 
+# Get module-level logger
+logger = logging.getLogger(__name__)
+
 from utilities.doc_utils import save_captions_to_docx
 from utilities.cw_utils import cw_caller
 from utilities.mail_utils import email_sender
 from utilities.meet_utils.google_meet.meet_action_controller import ActionController
+from utilities.env_config import config
+from utilities.error_handler import (
+    log_exception,
+    handle_browser_error,
+    handle_websocket_error,
+    handle_audio_error,
+    handle_file_error,
+)
 
 load_dotenv()
 
-PROFILE_DIR = Path("chrome_profile")
-project_id = os.getenv("PROJECT_ID", "6a78bbb3dfeb370713b22c8d")  
-project_name = os.getenv("PROJECT_NAME", "MeetBot Test")
+PROFILE_DIR = Path(config.get('PROFILE_DIR'))
+project_id = config.get('PROJECT_ID')
+project_name = config.get('PROJECT_NAME')
 
 class MeetBot:
     def __init__(self):
@@ -48,7 +60,7 @@ class MeetBot:
 
     async def ensure_auth_session(self, meeting_url: str):
         """Initialize browser with a persistent Google Chrome profile"""
-        print("🔐 Initializing browser with persistent profile...")
+        logger.info("Initializing browser with persistent profile")
 
         self.playwright = await async_playwright().start()
 
@@ -56,7 +68,10 @@ class MeetBot:
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
         # Set headless based on environment (Headless=True inside Docker/Production)
-        is_headless = os.getenv("HEADLESS", "false").lower() == "true"
+        try:
+            is_headless = config.get_bool('HEADLESS')
+        except ValueError:
+            is_headless = True  # Default to False if not set
 
         # Launch browser with persistent storage directory
         self.context = (
@@ -110,7 +125,7 @@ class MeetBot:
             };
         """)
 
-        print(f"🚀 Navigating to meeting URL: {meeting_url}")
+        logger.debug(f"Navigating to meeting URL: {meeting_url}")
         await self.page.goto(meeting_url)
 
 
@@ -121,17 +136,17 @@ class MeetBot:
                 '[aria-label*="Turn off camera" i], [aria-label*="turn off camera" i]'
             ).first
 
-            print("🔍 Checking for camera button...")
+            logger.debug("Checking for camera button")
 
             # 1. Wait for element to be visible (Replaces count > 0)
             await cam_button.wait_for(state="visible", timeout=8000)
 
             # 2. Click with force=True to bypass any overlay or animation backdrop
             await cam_button.click(force=True)
-            print("📹 Camera paused using aria-label!")
+            logger.debug("Camera paused using aria-label")
 
         except Exception as e:
-            print(f"⚠️ Could not pause camera via aria-label: {e}")
+            logger.warning(f"Could not pause camera via aria-label: {e}")
 
     async def check_meeting_status(self) -> str:
         """Detects whether the bot is in the LOBBY or IN_MEETING, handling auto-hidden control bars."""
@@ -189,14 +204,17 @@ class MeetBot:
             return "UNKNOWN"
 
     async def join_meeting(self, meeting_url: str):
-        print(f"🚀 Joining meeting: {meeting_url}")
+        logger.info(f"Joining meeting: {meeting_url}")
         
         await self.ensure_auth_session(meeting_url)
         guest_name = "Stormee.Ai"
 
-        as_guest = os.getenv("JOIN_AS_GUEST", "false").lower() == "true"
+        try:
+            as_guest = config.get_bool('JOIN_AS_GUEST')
+        except ValueError:
+            as_guest = False  # Default to False if not set
         if as_guest:
-            print("⏳ Waiting for Meet preview interface to stabilize...")
+            logger.debug("Waiting for preview interface to stabilize")
             await asyncio.sleep(4)
             await self.join_as_guest(guest_name)
             await self.pause_camera_in_meet()
@@ -211,23 +229,23 @@ class MeetBot:
         waited = 0
         is_admitted = False
 
-        print("⏳ Polling meeting status (Waiting for host admission)...")
+        logger.debug("Polling meeting status, waiting for host admission")
         while waited < max_admission_wait:
             status = await self.check_meeting_status()
 
             if status == "IN_MEETING":
-                print("🎉 Bot has been admitted into the meeting room!")
+                logger.info("Bot admitted to meeting room")
                 is_admitted = True
                 break
             elif status == "LOBBY":
                 if waited % 10 == 0:
-                    print("⌛ Still in lobby waiting for host admission...")
+                    logger.debug("Still in lobby, waiting for host admission")
 
             await asyncio.sleep(2)
             waited += 2
 
         if not is_admitted:
-            print("❌ Timed out or failed to enter meeting room. Aborting post-join actions.")
+            logger.error("Timed out or failed to enter meeting room. Aborting post-join actions")
             return
 
         # Ensure mic is muted once inside the active meeting
@@ -235,16 +253,16 @@ class MeetBot:
             if await self.action_controller.is_mic_on():
                 await self.action_controller.pause_audio()
         except Exception as e:
-            print(f"⚠️ Warning checking mic status: {e}")
+            logger.warning(f"Warning checking mic status: {e}")
 
         # Start post-admission services
         await self.start_chat_scraping()
-        print(f"🎥 Joined meeting using {self.browser_type}")
+        logger.info(f"Joined meeting using {self.browser_type}")
         await self.start_captions()
 
         self.participant_count = await self.get_participant_count()
         await self.start_participant_monitoring()
-        print(f"Participant count: {self.participant_count}")       
+        logger.debug(f"Participant count: {self.participant_count}")
         
     async def start_captions(self):
         """Start caption scraping"""
@@ -252,7 +270,7 @@ class MeetBot:
         self.scraping_active = True
         await self.turn_captions_on()
         self.caption_task = asyncio.create_task(self.scrape_captions())
-        print("🟢 Caption scraping started")
+        logger.info("Caption scraping started")
 
     async def scrape_captions(self):
         """Monitors live captions and maintains only active speaker blocks."""
@@ -297,7 +315,7 @@ class MeetBot:
                 await asyncio.sleep(1)
 
             except Exception as e:
-                print(f"Error scraping captions: {e}")
+                logger.error(f"Error scraping captions: {e}")
                 await asyncio.sleep(2)
 
     async def stop_captions(self) -> List[Dict]:
@@ -319,7 +337,7 @@ class MeetBot:
                 final_captions.append(entry)
 
         self.captions_segments = final_captions
-        print(f"🔴 Caption scraping stopped ({len(final_captions)} blocks saved)")
+        logger.info(f"Caption scraping stopped, {len(final_captions)} blocks saved")
         return self.captions_segments
         
     async def turn_captions_on(self):
@@ -328,12 +346,12 @@ class MeetBot:
             button = self.page.locator('[aria-label*="caption"], button:has-text("Turn on captions")').first
             if await button.count() > 0:
                 await button.click()
-                print("📝 Captions enabled")
+                logger.debug("Captions enabled")
             else:
                 await self.page.keyboard.press("c")
-                print("Couldn't find captions trying keyboard shortcut")
+                logger.debug("Could not find captions, trying keyboard shortcut")
         except Exception as e:
-            print(f"Error enabling captions: {e}")
+            logger.error(f"Error enabling captions: {e}")
 
     async def start_chat_scraping(self):
         """Hard-fix chat scraper using continuous Python-side polling"""
@@ -341,7 +359,7 @@ class MeetBot:
         self.chat_scraping_active = True
 
         # 1. Open the Chat Panel explicitly
-        print("💬 Ensuring chat panel is open...")
+        logger.debug("Ensuring chat panel is open")
         for _ in range(5):
             try:
                 chat_button = self.page.locator(
@@ -357,7 +375,7 @@ class MeetBot:
         # Background task that polls Google Meet chat directly
         async def poll_chat():
             processed_ids = set()
-            print("🟢 Hard-fix chat polling loop started!")
+            logger.info("Chat polling loop started")
 
             while self.chat_scraping_active:
                 try:
@@ -420,8 +438,8 @@ class MeetBot:
                             }
 
                             self.chat_segments.append(formatted_msg)
-                            print(
-                                f"💬 CHAT [{msg['sender']}]: {msg['text']}"
+                            logger.debug(
+                                f"CHAT [{msg['sender']}]: {msg['text']}"
                             )
 
                             # Handle Commands
@@ -430,8 +448,8 @@ class MeetBot:
                             if "stormee start recording" in text_lower:
                                 if not self.current_meeting_id:
                                     mid = f"meeting-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                                    print(
-                                        f"🚀 Executing Command: Start Audio Recording -> {mid}"
+                                    logger.info(
+                                        f"Executing command: Start Audio Recording -> {mid}"
                                     )
                                     asyncio.create_task(
                                         self.start_audio_recording(mid)
@@ -439,15 +457,15 @@ class MeetBot:
 
                             elif "stormee start caption recording" in text_lower:
                                 if not self.scraping_active:
-                                    print(
-                                        "🚀 Executing Command: Start Captions"
+                                    logger.info(
+                                        "Executing command: Start Captions"
                                     )
                                     asyncio.create_task(self.start_captions())
 
                             elif "stormee stop recording" in text_lower:
                                 if self.current_meeting_id:
-                                    print(
-                                        f"🛑 Executing Command: Stop Recording -> {self.current_meeting_id}"
+                                    logger.info(
+                                        f"Executing command: Stop Recording -> {self.current_meeting_id}"
                                     )
                                     asyncio.create_task(
                                         self.stop_audio_recording()
@@ -465,7 +483,7 @@ class MeetBot:
     async def stop_chat_scraping(self) -> List[Dict]:
         """Stop chat monitoring"""
         self.chat_scraping_active = False
-        print("🔴 Chat monitoring stopped")
+        logger.info("Chat monitoring stopped")
         return self.chat_segments
 
     async def get_participant_count(self) -> int:
@@ -478,7 +496,7 @@ class MeetBot:
                 await self.page.wait_for_selector('[data-participant-id]', timeout=10000)
                 elements = await self.page.query_selector_all('[data-participant-id]')
                 count = len(elements)
-                print(f"👥 Participants: {count}")
+                logger.debug(f"Participants: {count}")
                 return count
             except:
                 if attempt < 8:
@@ -498,7 +516,7 @@ class MeetBot:
                 try:
                     new = await self.get_participant_count()
                     if new != last:
-                        print(f"🔄 Participants: {last} → {new}")
+                        logger.debug(f"Participants changed: {last} to {new}")
                         self.participant_count = new
                     last = new
                     
@@ -509,7 +527,7 @@ class MeetBot:
                     
                     await asyncio.sleep(2)
                 except Exception as e:
-                    print(f"Monitor error: {e}")
+                    logger.error(f"Monitor error: {e}")
                     await asyncio.sleep(2)
         
         self.participant_task = asyncio.create_task(monitor())
@@ -526,10 +544,10 @@ class MeetBot:
     async def leave_meeting(self):
         """Safely leaves the meeting room and closes browser contexts."""
         if not self.page or self.page.is_closed():
-            print("⚠️ Page is already closed.")
+            logger.warning("Page is already closed")
             return
 
-        print("🚪 Leaving meeting...")
+        logger.info("Leaving meeting")
 
         try:
             # 1. Stop background scraping tasks gracefully
@@ -543,12 +561,25 @@ class MeetBot:
                     if callable(task_fn):
                         await task_fn()
                 except Exception as task_err:
-                    print(f"⚠️ Non-fatal error stopping background task: {task_err}")
+                    logger.warning(f"Non-fatal error stopping background task: {task_err}")
 
             try:
                 # Use per-bot metadata if available, otherwise fall back to environment/defaults
-                user_name = getattr(self, 'user_name', os.getenv('DEFAULT_USER_NAME', 'Unknown User'))
-                user_email = getattr(self, 'user_email', os.getenv('DEFAULT_USER_EMAIL', 'no-reply@example.com'))
+                if hasattr(self, 'user_name') and self.user_name:
+                    user_name = self.user_name
+                else:
+                    try:
+                        user_name = config.get('DEFAULT_USER_NAME')
+                    except ValueError:
+                        user_name = 'Unknown User'
+                
+                if hasattr(self, 'user_email') and self.user_email:
+                    user_email = self.user_email
+                else:
+                    try:
+                        user_email = config.get('DEFAULT_USER_EMAIL')
+                    except ValueError:
+                        user_email = 'no-reply@example.com'
                 proj_name = getattr(self, 'project_name', project_name)
                 proj_id = getattr(self, 'project_id', project_id)
                 meeting_title = getattr(self, 'meeting_title', f"Meeting {datetime.now().strftime('%Y-%m-%d')}")
@@ -561,11 +592,11 @@ class MeetBot:
                         display_name=meeting_title
                     )
                     if len(response_json.get("uploaded")) > 0:
-                        print(f"✅ Captions uploaded to CW: {response_json['uploaded'][0].get('fileId')}")
+                        logger.info(f"Captions uploaded to CW: {response_json['uploaded'][0].get('name')}")
                         cleanup_path = Path(filename)
                         if cleanup_path.exists():
                             cleanup_path.unlink()
-                            print(f"🗑️ Deleted local file: {cleanup_path}")
+                            logger.debug(f"Deleted local file: {cleanup_path}")
 
                         await email_sender.send_meeting_transcript_uploaded_email(
                                     user_name=user_name,
@@ -575,7 +606,7 @@ class MeetBot:
                                     transcript_name=meeting_title,
                                 )
             except Exception as docx_err:
-                print(f"⚠️ Failed to save captions to DOCX: {docx_err}")
+                logger.warning(f"Failed to save captions to DOCX: {docx_err}")
             # 2. Wake up hidden bottom control bar by wiggling mouse
             try:
                 await self.page.mouse.move(200, 200)
@@ -584,7 +615,7 @@ class MeetBot:
                 pass
 
             # 3. Target Leave Button using jsname="CQylAd" or wildcard aria-label
-            print("🖱️ Clicking Leave call button...")
+            logger.debug("Clicking Leave call button")
             leave_clicked = await self.page.evaluate("""
                 () => {
                     const btn = document.querySelector('[aria-label*="Leave call" i]') ||
@@ -605,11 +636,11 @@ class MeetBot:
                 if await leave_button.count() > 0:
                     await leave_button.click(force=True)
 
-            print("👋 Successfully clicked Leave Call.")
+            logger.info("Successfully clicked Leave Call button")
             await asyncio.sleep(1.5)
 
         except Exception as e:
-            print(f"⚠️ Error clicking leave button: {e}")
+            logger.warning(f"Error clicking leave button: {e}")
 
         # 4. Clean up Playwright Contexts safely
         finally:
@@ -621,34 +652,34 @@ class MeetBot:
                 if hasattr(self, "playwright") and self.playwright:
                     await self.playwright.stop()
             except Exception as cleanup_err:
-                print(f"⚠️ Cleanup warning: {cleanup_err}")
+                logger.warning(f"Cleanup warning: {cleanup_err}")
 
             # Reset state variables
             self.page = None
             self.context = None
             self.browser = None
-            print("✅ Left meeting and cleaned up browser resources.")
+            logger.info("Left meeting and cleaned up browser resources")
 
     async def play_audio(self):
         try:
             mic_button = self.page.locator('[aria-label*="microphone"], [aria-label*="mic"]').first
             if await mic_button.count() > 0:
                 await mic_button.click()
-                print("🎤 Audio enabled.")
+                logger.info("Audio enabled")
         except Exception as e:
-            print(f"❌ Error enabling audio: {e}")
+            logger.error(f"Error enabling audio: {e}")
 
     async def start_audio_recording(self, meeting_id: str):
         """Start recording audio"""
         if not self.page:
-            print("❌ No page available")
+            logger.error("No page available")
             return
         
         self.current_meeting_id = meeting_id
         if meeting_id not in self.audio_chunks:
             self.audio_chunks[meeting_id] = []
         
-        print(f"🎙️ Starting audio recording for meeting: {meeting_id}")
+        logger.info(f"Starting audio recording for meeting: {meeting_id}")
         
         # WebSocket connection
         if not self.sio or not self.sio.connected:
@@ -662,25 +693,25 @@ class MeetBot:
             
             @self.sio.event
             async def connect():
-                print("✅ WebSocket connected")
+                logger.info("WebSocket connected")
             
             @self.sio.event
             async def disconnect():
-                print("🔌 WebSocket disconnected")
+                logger.info("WebSocket disconnected")
             
             @self.sio.event
             async def connect_error(data):
-                print(f"❌ WebSocket connection error: {data}")
+                logger.error(f"WebSocket connection error: {data}")
             
             try:
                 ws_url = "http://localhost:5000"
-                print(f"🔌 Connecting to WebSocket at {ws_url}...")
+                logger.debug(f"Connecting to WebSocket at {ws_url}")
                 await self.sio.connect(ws_url)
                 await asyncio.sleep(0.5)
-                print(f"✅ WebSocket connected successfully")
+                logger.info("WebSocket connected successfully")
             except Exception as e:
-                print(f"⚠️ WebSocket connection failed: {e}")
-                print("⚠️ Audio will be saved locally (no real-time streaming)")
+                logger.warning(f"WebSocket connection failed: {e}")
+                logger.warning("Audio will be saved locally, no real-time streaming")
         
         # Check if function is already exposed
         is_function_exposed = await self.page.evaluate("""
@@ -695,9 +726,9 @@ class MeetBot:
                 'sendAudioChunkToPython',
                 handle_chunk_wrapper
             )
-            print("✅ Exposed sendAudioChunkToPython function")
+            logger.debug("Exposed sendAudioChunkToPython function")
         else:
-            print("ℹ️ sendAudioChunkToPython already exposed, skipping")
+            logger.debug("sendAudioChunkToPython already exposed, skipping")
         
         # Start recording with SMALLER chunk interval
         await self.page.evaluate("""
@@ -779,7 +810,7 @@ class MeetBot:
             }
         """, meeting_id)
         
-        print(f"✅ Recording started for {meeting_id}")
+        logger.info(f"Recording started for {meeting_id}")
 
     async def _handle_audio_chunk(self, chunk: dict):
         """Handle audio chunk"""
@@ -787,7 +818,7 @@ class MeetBot:
         chunk_id = chunk.get('chunkId')
         audio_blob = chunk.get('audioBlob', [])
         
-        print(f"📥 Chunk: {chunk_id}, size: {len(audio_blob)} bytes")
+        logger.debug(f"Chunk: {chunk_id}, size: {len(audio_blob)} bytes")
         
         # Store chunk locally
         if meeting_id not in self.audio_chunks:
@@ -799,21 +830,21 @@ class MeetBot:
         if self.sio and self.sio.connected:
             try:
                 await self.sio.emit('audioChunk', chunk)
-                print(f"✅ Sent to WebSocket: {chunk_id}")
+                logger.debug(f"Sent to WebSocket: {chunk_id}")
             except Exception as e:
-                print(f"⚠️ WebSocket send failed: {e}")
-                print(f"⚠️ Chunk stored locally only")
+                logger.warning(f"WebSocket send failed: {e}")
+                logger.debug("Chunk stored locally only")
         else:
-            print(f"⚠️ WebSocket not connected, storing locally only")
+            logger.debug("WebSocket not connected, storing locally only")
     
     async def save_audio(self, meeting_id: str):
         """Save audio to file"""
         if not self.audio_chunks.get(meeting_id):
-            print(f"⚠️ No audio chunks received for {meeting_id}")
+            logger.warning(f"No audio chunks received for {meeting_id}")
             return
         
         chunk_count = len(self.audio_chunks[meeting_id])
-        print(f"💾 Saving audio for {meeting_id} ({chunk_count} chunks)")
+        logger.info(f"Saving audio for {meeting_id} ({chunk_count} chunks)")
         
         # Sort chunks by their numeric ID
         sorted_chunks = sorted(
@@ -825,14 +856,14 @@ class MeetBot:
         audio_data = b''.join(bytes(chunk['audioBlob']) for chunk in sorted_chunks)
         
         if len(audio_data) == 0:
-            print(f"⚠️ No audio data in chunks for {meeting_id}")
+            logger.warning(f"No audio data in chunks for {meeting_id}")
             return
         
         # Save as WebM
         webm_path = f"{meeting_id.replace('/', '_').replace(':', '_')}.webm"
         with open(webm_path, 'wb') as f:
             f.write(audio_data)
-        print(f"✅ Saved {webm_path} ({len(audio_data)} bytes)")
+        logger.info(f"Saved {webm_path} ({len(audio_data)} bytes)")
         
         # Convert to WAV using ffmpeg
         wav_path = f"{meeting_id.replace('/', '_').replace(':', '_')}.wav"
@@ -849,27 +880,27 @@ class MeetBot:
             stdout, stderr = await process.communicate()
             
             if process.returncode == 0:
-                print(f"✅ Converted to {wav_path}")
+                logger.info(f"Converted to {wav_path}")
                 os.remove(webm_path)
-                print(f"🗑️ Removed temporary {webm_path}")
+                logger.debug(f"Removed temporary {webm_path}")
             else:
-                print(f"⚠️ FFmpeg conversion failed (exit code {process.returncode})")
-                print(f"stderr: {stderr.decode()[:200]}")
+                logger.warning(f"FFmpeg conversion failed (exit code {process.returncode})")
+                logger.warning(f"FFmpeg stderr: {stderr.decode()[:200]}")
         except FileNotFoundError:
-            print(f"⚠️ FFmpeg not found. Install it with: sudo apt-get install ffmpeg")
+            logger.warning("FFmpeg not found. Install with: sudo apt-get install ffmpeg")
         except Exception as e:
-            print(f"⚠️ Conversion failed: {e}")
+            logger.warning(f"Conversion failed: {e}")
         
         # Clean up chunks from memory
         del self.audio_chunks[meeting_id]
-        print(f"🧹 Cleaned up chunks for {meeting_id}")
+        logger.debug(f"Cleaned up chunks for {meeting_id}")
 
     async def stop_audio_recording(self):
         """Stop recording"""
         if not self.page:
             return
         
-        print("⏹️ Stopping recording")
+        logger.info("Stopping recording")
         
         # Stop the MediaRecorder
         await self.page.evaluate("""
@@ -882,7 +913,7 @@ class MeetBot:
         """)
         
         # ✅ FIX: Wait for final chunk to arrive
-        print("⏳ Waiting for final audio chunks...")
+        logger.debug("Waiting for final audio chunks")
         await asyncio.sleep(2)  # Give time for final chunk to process
         
         # Save audio
@@ -893,13 +924,13 @@ class MeetBot:
         # Disconnect WebSocket
         if self.sio and self.sio.connected:
             await self.sio.disconnect()
-            print("🔌 WebSocket disconnected")
+            logger.info("WebSocket disconnected")
             self.sio = None
             
 
     async def join_as_guest(self, guest_name: str):
         # 1. Dismiss "Sign in with your Google account" popup
-        print("1️⃣ Checking for popup modal...")
+        logger.debug("Checking for popup modal")
         await self.page.evaluate("""
             () => {
                 const gotItBtn = document.querySelector('button[jsname="EszDEe"]') || 
@@ -912,7 +943,7 @@ class MeetBot:
         await asyncio.sleep(1)
 
         # 2. Wait for Name Input to exist in DOM
-        print("2️⃣ Locating guest name input...")
+        logger.debug("Locating guest name input")
         input_found = False
         for _ in range(10):  # Retry up to 10 seconds
             input_found = await self.page.evaluate("""
@@ -928,12 +959,12 @@ class MeetBot:
             await asyncio.sleep(1)
 
         if not input_found:
-            print("❌ Could not locate Guest Name input field.")
+            logger.warning("Could not locate Guest Name input field")
             await self.page.screenshot(path="error_no_input.png")
             return False
 
         # 3. Focus, Clear, Type Name, and Trigger React State
-        print(f"3️⃣ Typing guest name: '{guest_name}'...")
+        logger.debug(f"Typing guest name: {guest_name}")
 
         # Focus the input element via Playwright
         name_input = self.page.locator(
@@ -965,7 +996,7 @@ class MeetBot:
         await asyncio.sleep(1)
 
         # 4. Click the Join / Ask to join Button
-        print("4️⃣ Attempting to click Join button...")
+        logger.debug("Attempting to click Join button")
         clicked = await self.page.evaluate("""
             () => {
                 const joinBtn = document.querySelector('button[aria-label*="Ask to join"]') ||
@@ -986,19 +1017,19 @@ class MeetBot:
         """)
 
         if not clicked:
-            print("⚠️ JS click failed, attempting Playwright locator click...")
+            logger.debug("JS click failed, attempting Playwright locator click")
             join_btn = self.page.locator(
                 'button:has-text("Ask to join"), button:has-text("Join now")'
             ).first
             await join_btn.click(force=True)
 
-        print("✅ Guest join sequence executed successfully!")
+        logger.info("Guest join sequence executed successfully")
         await self.page.screenshot(path="join_attempt.png")
         return True
 
     async def dismiss_sign_in_popup(self):
         """Dismisses the 'Sign in with your Google account' popup modal in Google Meet."""
-        print("🔍 Checking for 'Sign in with your Google account' popup...")
+        logger.debug("Checking for 'Sign in with your Google account' popup")
 
         # Selector strategies targeting this exact modal structure
         got_it_button = self.page.locator(
@@ -1010,14 +1041,14 @@ class MeetBot:
         try:
             # 1. Wait briefly for the button to appear
             if await got_it_button.is_visible(timeout=3000):
-                print("💡 Found 'Got it' popup! Clicking button...")
+                logger.debug("Found 'Got it' popup, clicking button")
                 # Click with force=True in case another transparent element overlays it slightly
                 await got_it_button.click(force=True)
                 await asyncio.sleep(0.5)
-                print("✅ Dismissed 'Got it' popup.")
+                logger.info("Dismissed 'Got it' popup")
                 return True
         except Exception as e:
-            print(f"⚠️ Standard click on 'Got it' button skipped: {e}")
+            logger.warning(f"Standard click on 'Got it' button skipped: {e}")
 
         # 2. Fallback: If button click fails or modal persists, remove via direct DOM script
         try:
@@ -1036,17 +1067,18 @@ class MeetBot:
                     }
                 }
             """)
-            print("🧹 Cleaned up modal elements via JS injection.")
+            logger.debug("Cleaned up modal elements via JS injection")
         except Exception as e:
-            print(f"⚠️ JS cleanup error: {e}")
+            logger.warning(f"JS cleanup error: {e}")
 
     async def _launch_browser_with_fallback(self):
         """Launch browser with automatic fallback to Chrome on failure"""
         is_macos = platform.system() == "Darwin"
+        meeting_id = getattr(self, 'current_meeting_id', 'unknown')
         
         # Try Chromium first
         try:
-            print("🌐 Attempting to launch Chromium...")
+            logger.info("Attempting to launch Chromium with automation flags")
             self.browser = await self.playwright.chromium.launch(
                 headless=False,
                 args=[
@@ -1058,15 +1090,23 @@ class MeetBot:
                 timeout=10000  # 10 second timeout
             )
             self.browser_type = "chromium"
-            print("✅ Chromium launched successfully")
+            logger.info(f"Chromium launched successfully for meeting {meeting_id}")
             return
         except Exception as e:
-            print(f"⚠️ Chromium failed: {e}")
+            context = {
+                'browser_type': 'chromium',
+                'platform': platform.system(),
+                'meeting_id': meeting_id,
+            }
+            logger.warning(
+                f"Chromium launch failed, attempting fallback [browser=chromium, platform={platform.system()}]"
+            )
+            log_exception(logger, logging.DEBUG, "Chromium launch error details", e, context)
             
             # On macOS, try system Chrome
             if is_macos:
                 try:
-                    print("🍎 Trying system Chrome...")
+                    logger.info("Attempting system Chrome as fallback")
                     self.browser = await self.playwright.chromium.launch(
                         channel="chrome",
                         headless=False,
@@ -1080,14 +1120,47 @@ class MeetBot:
                         timeout=10000
                     )
                     self.browser_type = "chrome"
-                    print("✅ System Chrome launched successfully")
+                    logger.info(f"System Chrome launched successfully for meeting {meeting_id}")
                     return
                 except Exception as chrome_error:
-                    print(f"❌ Chrome also failed: {chrome_error}")
-                    print("💡 Install Chrome from: https://www.google.com/chrome/")
+                    chrome_context = {
+                        'browser_type': 'chrome',
+                        'platform': 'macOS',
+                        'meeting_id': meeting_id,
+                    }
+                    logger.error(
+                        f"Chrome launch also failed for meeting {meeting_id} "
+                        "[browser=chrome, platform=macOS]"
+                    )
+                    log_exception(logger, logging.DEBUG, "Chrome launch error details", chrome_error, chrome_context)
+                    logger.error(
+                        "Both Chromium and Chrome failed. Install Chrome from: "
+                        "https://www.google.com/chrome/"
+                    )
             
-            # Last resort: raise the original error
-            raise Exception(f"Failed to launch browser: {e}")
+            # Last resort: raise the original error with comprehensive context
+            context = {
+                'chromium_error': str(e),
+                'chrome_error': str(chrome_error) if is_macos else 'N/A',
+                'platform': platform.system(),
+                'meeting_id': meeting_id,
+            }
+            logger.error(
+                f"Failed to launch any browser variant for meeting {meeting_id} "
+                "[context: chromium_failed, chrome_failed_or_skipped]"
+            )
+            log_exception(
+                logger,
+                logging.ERROR,
+                f"Browser launch failed for all variants",
+                e,
+                context
+            )
+            raise Exception(
+                f"Failed to launch browser for meeting {meeting_id}. "
+                f"Tried: Chromium (failed), Chrome (failed/skipped). "
+                f"Please ensure a supported browser is installed."
+            )
 
     
 # Global instance
@@ -1096,22 +1169,51 @@ meet_bots: Dict[str, MeetBot] = {}
 
 async def create_bot_for(meeting_id: str, meeting_url: str, *, user_name: Optional[str]=None, user_email: Optional[str]=None, project_id: Optional[str]=None, project_name: Optional[str]=None, meeting_title: Optional[str]=None) -> MeetBot:
     """Create and register a MeetBot for a specific meeting_id. Starts join in background."""
-    if meeting_id in meet_bots:
-        return meet_bots[meeting_id]
+    try:
+        if meeting_id in meet_bots:
+            logger.debug(f"Bot already exists for meeting {meeting_id}, returning existing instance")
+            return meet_bots[meeting_id]
 
-    bot = MeetBot()
-    # Attach metadata to the bot instance for later use (emails, uploads, etc.)
-    bot.user_name = user_name
-    bot.user_email = user_email
-    bot.project_id = project_id
-    bot.project_name = project_name
-    bot.meeting_title = meeting_title
+        logger.info(f"Creating new bot for meeting {meeting_id}")
+        bot = MeetBot()
+        
+        # Attach metadata to the bot instance for later use (emails, uploads, etc.)
+        bot.user_name = user_name
+        bot.user_email = user_email
+        bot.project_id = project_id or config.get('PROJECT_ID')
+        bot.project_name = project_name or config.get('PROJECT_NAME')
+        bot.meeting_title = meeting_title
 
-    meet_bots[meeting_id] = bot
+        meet_bots[meeting_id] = bot
+        logger.info(f"Bot registered for meeting {meeting_id}")
 
-    # Start join in background so API can return quickly
-    asyncio.create_task(bot.join_meeting(meeting_url))
-    return bot
+        # Start join in background so API can return quickly
+        try:
+            asyncio.create_task(bot.join_meeting(meeting_url))
+            logger.info(f"Join task created for meeting {meeting_id}")
+        except Exception as task_error:
+            context = {
+                'meeting_id': meeting_id,
+                'meeting_url': meeting_url,
+            }
+            logger.error(
+                f"Failed to create join task for meeting {meeting_id}"
+            )
+            log_exception(logger, logging.ERROR, "Task creation failed", task_error, context)
+            # Don't re-raise here - let the main join_meeting handle errors
+        
+        return bot
+    except Exception as e:
+        context = {
+            'meeting_id': meeting_id,
+            'user_name': user_name,
+            'user_email': user_email,
+        }
+        logger.error(
+            f"Failed to create bot for meeting {meeting_id}"
+        )
+        log_exception(logger, logging.ERROR, "Bot creation failed", e, context)
+        raise
 
 
 def get_bot(meeting_id: str) -> Optional[MeetBot]:
@@ -1125,7 +1227,7 @@ async def remove_bot(meeting_id: str):
     try:
         await bot.leave_meeting()
     except Exception as e:
-        print(f"⚠️ Error removing bot for {meeting_id}: {e}")
+        logger.error(f"Error removing bot for {meeting_id}: {e}")
     finally:
         if meeting_id in meet_bots:
             del meet_bots[meeting_id]
