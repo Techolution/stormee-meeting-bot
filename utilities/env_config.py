@@ -57,7 +57,7 @@ class Config(BaseSettings):
 
     DEFAULT_USER_NAME: str
     DEFAULT_USER_EMAIL: str
-    JOIN_AS_GUEST: bool = False
+    JOIN_AS_GUEST: Optional[bool] = False
 
     # ============================================================
     # Profile

@@ -103,6 +103,7 @@ venv.bak/
 
 # macOS
 .DS_Store
+.ecg
 
 # Windows
 Thumbs.db
