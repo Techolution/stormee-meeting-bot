@@ -5,7 +5,7 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 
 
-async def save_captions_to_docx(filename: Optional[str] = None, captions_segments: list = None) -> str:
+async def save_captions_to_docx(filename: Optional[str] = None, captions_segments: list = None, title: Optional[str] = None) -> str:
     """Exports all gathered meeting captions into a formatted DOCX document."""
     if not captions_segments:
         print("⚠️ No caption segments available to export.")
@@ -16,9 +16,9 @@ async def save_captions_to_docx(filename: Optional[str] = None, captions_segment
         filename = f"meeting_captions_{timestamp_str}.docx"
 
     doc = Document()
-
+    doc_title = f"{title} Transcript" if title else "Google Meet Transcript"
     # Title
-    title = doc.add_heading("Google Meet Transcript", level=0)
+    title = doc.add_heading(doc_title, level=0)
     title.style.font.name = "Arial"
 
     # Metadata Paragraph

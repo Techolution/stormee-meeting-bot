@@ -546,12 +546,19 @@ class MeetBot:
                     print(f"⚠️ Non-fatal error stopping background task: {task_err}")
 
             try:
-                filename = await save_captions_to_docx(captions_segments=self.captions_segments)
+                # Use per-bot metadata if available, otherwise fall back to environment/defaults
+                user_name = getattr(self, 'user_name', os.getenv('DEFAULT_USER_NAME', 'Unknown User'))
+                user_email = getattr(self, 'user_email', os.getenv('DEFAULT_USER_EMAIL', 'no-reply@example.com'))
+                proj_name = getattr(self, 'project_name', project_name)
+                proj_id = getattr(self, 'project_id', project_id)
+                meeting_title = getattr(self, 'meeting_title', f"Meeting {datetime.now().strftime('%Y-%m-%d')}")
+
+                filename = await save_captions_to_docx(captions_segments=self.captions_segments, title = meeting_title)
                 if filename:
                     response_json = await cw_caller.upload_file(
                         file_path=filename,
                         project_id=project_id,
-                        display_name="Meeting Chat"
+                        display_name=meeting_title
                     )
                     if len(response_json.get("uploaded")) > 0:
                         print(f"✅ Captions uploaded to CW: {response_json['uploaded'][0].get('fileId')}")
@@ -559,12 +566,6 @@ class MeetBot:
                         if cleanup_path.exists():
                             cleanup_path.unlink()
                             print(f"🗑️ Deleted local file: {cleanup_path}")
-                        # Use per-bot metadata if available, otherwise fall back to environment/defaults
-                        user_name = getattr(self, 'user_name', os.getenv('DEFAULT_USER_NAME', 'Unknown User'))
-                        user_email = getattr(self, 'user_email', os.getenv('DEFAULT_USER_EMAIL', 'no-reply@example.com'))
-                        proj_name = getattr(self, 'project_name', project_name)
-                        proj_id = getattr(self, 'project_id', project_id)
-                        meeting_title = getattr(self, 'meeting_title', f"Meeting Transcript {datetime.now().strftime('%Y-%m-%d')}")
 
                         await email_sender.send_meeting_transcript_uploaded_email(
                                     user_name=user_name,
