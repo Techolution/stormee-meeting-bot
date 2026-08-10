@@ -12,7 +12,8 @@ from controllers.stormee_meet_bot_controller import (
     start_chat_scraping_controller,
     stop_chat_scraping_controller,
     MeetingUrlRequest,
-    RecordingRequest
+    RecordingRequest,
+    MeetingActionRequest,
 )
 
 router = APIRouter()
@@ -67,7 +68,7 @@ async def start_captions(request: MeetingUrlRequest):
 
 
 @router.post("/stop", tags=["Captions"], summary="Stop captions scraping and return the full transcript")
-async def stop_captions():
+async def stop_captions(request: MeetingActionRequest):
     """
     Stop captions scraping and return the full transcript
     
@@ -82,7 +83,7 @@ async def stop_captions():
 
 
 @router.post("/audio", tags=["Meeting Control"], summary="Turn on the bot's microphone")
-async def enable_audio():
+async def enable_audio(request: MeetingActionRequest):
     """
     Turn on the bot's microphone
     
@@ -97,7 +98,7 @@ async def enable_audio():
 
 
 @router.post("/pauseaudio", tags=["Meeting Control"], summary="Mute the bot's microphone")
-async def disable_audio():
+async def disable_audio(request: MeetingActionRequest):
     """
     Mute the bot's microphone
     
@@ -130,7 +131,7 @@ async def start_recording(request: RecordingRequest):
 
 
 @router.post("/record/stop", tags=["Recording"], summary="Stop recording, save, and convert the audio file")
-async def stop_recording():
+async def stop_recording(request: RecordingRequest):
     """
     Stop recording, save, and convert the audio file
     
@@ -140,7 +141,7 @@ async def stop_recording():
     Raises:
         500: Failed to stop audio recording
     """
-    return await stop_recording_controller()
+    return await stop_recording_controller(request)
 
 
 @router.get("/record/status", tags=["Recording"], summary="Get the current audio recording status (Placeholder)")
@@ -156,7 +157,7 @@ async def get_recording_status():
 
 
 @router.post("/chat/start", tags=["Chat"], summary="Start scraping and monitoring the meeting chat")
-async def start_chat_scraping():
+async def start_chat_scraping(request: MeetingActionRequest):
     """
     Start scraping and monitoring the meeting chat
     
@@ -166,11 +167,11 @@ async def start_chat_scraping():
     Raises:
         500: Failed to start chat scraping
     """
-    return await start_chat_scraping_controller()
+    return await start_chat_scraping_controller(request)
 
 
-@router.get("/chat/stop", tags=["Chat"], summary="Stop chat scraping and return collected chat segments")
-async def stop_chat_scraping():
+@router.post("/chat/stop", tags=["Chat"], summary="Stop chat scraping and return collected chat segments")
+async def stop_chat_scraping(request: MeetingActionRequest):
     """
     Stop chat scraping and return collected chat segments
     
@@ -181,10 +182,10 @@ async def stop_chat_scraping():
     Raises:
         500: Failed to stop chat scraping
     """
-    return await stop_chat_scraping_controller()
+    return await stop_chat_scraping_controller(request)
 
 @router.post("/exit", tags=["Meeting Control"], summary="Exit the Google Meet meeting")
-async def exit_meeting():
+async def exit_meeting(request: MeetingActionRequest):
     """
     Exit the Google Meet meeting
     
@@ -194,4 +195,4 @@ async def exit_meeting():
     Raises:
         500: Failed to exit meeting
     """
-    return await exit_meeting_controller()
+    return await exit_meeting_controller(request=request)

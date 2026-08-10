@@ -7,10 +7,12 @@ from typing import List, Dict, Optional
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import socketio
 from dotenv import load_dotenv
+import re
 
 from utilities.doc_utils import save_captions_to_docx
 from utilities.cw_utils import cw_caller
 from utilities.mail_utils import email_sender
+from utilities.meet_utils.google_meet.meet_action_controller import ActionController
 
 load_dotenv()
 
@@ -20,6 +22,7 @@ project_name = os.getenv("PROJECT_NAME", "MeetBot Test")
 
 class MeetBot:
     def __init__(self):
+        self.action_controller = ActionController(lambda: self.page)
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -42,55 +45,6 @@ class MeetBot:
         
         # WebSocket
         self.sio: Optional[socketio.AsyncClient] = None
-
-    async def _launch_browser_with_fallback(self):
-        """Launch browser with automatic fallback to Chrome on failure"""
-        is_macos = platform.system() == "Darwin"
-        
-        # Try Chromium first
-        try:
-            print("🌐 Attempting to launch Chromium...")
-            self.browser = await self.playwright.chromium.launch(
-                headless=False,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--start-maximized",
-                    "--use-fake-device-for-media-stream",
-                    "--use-fake-ui-for-media-stream",
-                ],
-                timeout=10000  # 10 second timeout
-            )
-            self.browser_type = "chromium"
-            print("✅ Chromium launched successfully")
-            return
-        except Exception as e:
-            print(f"⚠️ Chromium failed: {e}")
-            
-            # On macOS, try system Chrome
-            if is_macos:
-                try:
-                    print("🍎 Trying system Chrome...")
-                    self.browser = await self.playwright.chromium.launch(
-                        channel="chrome",
-                        headless=False,
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--start-maximized",
-                            "--use-fake-device-for-media-stream",
-                            "--use-fake-ui-for-media-stream",
-                            "--disable-gpu",
-                        ],
-                        timeout=10000
-                    )
-                    self.browser_type = "chrome"
-                    print("✅ System Chrome launched successfully")
-                    return
-                except Exception as chrome_error:
-                    print(f"❌ Chrome also failed: {chrome_error}")
-                    print("💡 Install Chrome from: https://www.google.com/chrome/")
-            
-            # Last resort: raise the original error
-            raise Exception(f"Failed to launch browser: {e}")
 
     async def ensure_auth_session(self, meeting_url: str):
         """Initialize browser with a persistent Google Chrome profile"""
@@ -159,42 +113,6 @@ class MeetBot:
         print(f"🚀 Navigating to meeting URL: {meeting_url}")
         await self.page.goto(meeting_url)
 
-    async def is_mic_on(self) -> bool:
-        if not self.page:
-            return False
-        try:
-            count = await self.page.locator('[data-is-muted="false"]').first.count()
-            return count > 0
-        except:
-            return False
-
-    async def play_audio(self):
-        try:
-            mic_button = self.page.locator('[aria-label*="microphone"], [aria-label*="mic"]').first
-            if await mic_button.count() > 0:
-                await mic_button.click()
-                print("🎤 Audio enabled.")
-        except Exception as e:
-            print(f"❌ Error enabling audio: {e}")
-
-    async def pause_audio(self):
-        try:
-            mic_button = self.page.locator('[aria-label*="microphone"], [aria-label*="mic"]').first
-            if await mic_button.count() > 0:
-                await mic_button.click()
-                print("🔇 Audio paused.")
-        except Exception as e:
-            print(f"❌ Error pausing audio: {e}")
-
-    async def pause_camera(self, aria_label="camera"):
-        try:
-            cam_button = self.page.locator(f'[aria-label*="{aria_label}"]').first
-            print(f"🔍 Checking for camera button with aria-label containing '{aria_label}'...")
-            if await cam_button.count() > 0:
-                await cam_button.click()
-                print("📹 Camera paused.")
-        except Exception as e:
-            print(f"❌ Error pausing camera: {e}")
 
     async def pause_camera_in_meet(self):
         try:
@@ -214,106 +132,6 @@ class MeetBot:
 
         except Exception as e:
             print(f"⚠️ Could not pause camera via aria-label: {e}")
-
-    async def join_as_guest(self, guest_name: str):
-        # 1. Dismiss "Sign in with your Google account" popup
-        print("1️⃣ Checking for popup modal...")
-        await self.page.evaluate("""
-            () => {
-                const gotItBtn = document.querySelector('button[jsname="EszDEe"]') || 
-                                Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Got it'));
-                if (gotItBtn) gotItBtn.click();
-                const modal = document.querySelector('.KJktIb');
-                if (modal) modal.remove();
-            }
-        """)
-        await asyncio.sleep(1)
-
-        # 2. Wait for Name Input to exist in DOM
-        print("2️⃣ Locating guest name input...")
-        input_found = False
-        for _ in range(10):  # Retry up to 10 seconds
-            input_found = await self.page.evaluate("""
-                () => {
-                    const el = document.querySelector('input[jsname="YPqjbf"]') || 
-                            document.querySelector('input[aria-label="Your name"]') ||
-                            document.querySelector('input[placeholder="Your name"]');
-                    return el !== null;
-                }
-            """)
-            if input_found:
-                break
-            await asyncio.sleep(1)
-
-        if not input_found:
-            print("❌ Could not locate Guest Name input field.")
-            await self.page.screenshot(path="error_no_input.png")
-            return False
-
-        # 3. Focus, Clear, Type Name, and Trigger React State
-        print(f"3️⃣ Typing guest name: '{guest_name}'...")
-
-        # Focus the input element via Playwright
-        name_input = self.page.locator(
-            'input[jsname="YPqjbf"], input[aria-label="Your name"]'
-        ).first
-        await name_input.focus()
-        await asyncio.sleep(0.3)
-
-        # Clear field
-        await self.page.keyboard.press("Control+A")
-        await self.page.keyboard.press("Backspace")
-
-        # Type sequentially character by character to trigger trusted native events
-        await self.page.keyboard.type(guest_name, delay=60)
-        await asyncio.sleep(0.5)
-
-        # Dispatch final blur/change events via JS to be 100% sure React updates
-        await self.page.evaluate("""
-            () => {
-                const el = document.querySelector('input[jsname="YPqjbf"]') || 
-                        document.querySelector('input[aria-label="Your name"]');
-                if (el) {
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new Event('blur', { bubbles: true }));
-                }
-            }
-        """)
-        await asyncio.sleep(1)
-
-        # 4. Click the Join / Ask to join Button
-        print("4️⃣ Attempting to click Join button...")
-        clicked = await self.page.evaluate("""
-            () => {
-                const joinBtn = document.querySelector('button[aria-label*="Ask to join"]') ||
-                                document.querySelector('button[aria-label*="Join now"]') ||
-                                Array.from(document.querySelectorAll('button')).find(b => {
-                                    const txt = b.textContent.trim().toLowerCase();
-                                    return txt.includes('ask to join') || txt.includes('join now');
-                                });
-
-                if (joinBtn) {
-                    joinBtn.disabled = false;
-                    joinBtn.removeAttribute('disabled');
-                    joinBtn.click();
-                    return true;
-                }
-                return false;
-            }
-        """)
-
-        if not clicked:
-            print("⚠️ JS click failed, attempting Playwright locator click...")
-            join_btn = self.page.locator(
-                'button:has-text("Ask to join"), button:has-text("Join now")'
-            ).first
-            await join_btn.click(force=True)
-
-        print("✅ Guest join sequence executed successfully!")
-        await self.page.screenshot(path="join_attempt.png")
-        return True
-
 
     async def check_meeting_status(self) -> str:
         """Detects whether the bot is in the LOBBY or IN_MEETING, handling auto-hidden control bars."""
@@ -384,15 +202,9 @@ class MeetBot:
             await self.pause_camera_in_meet()
 
         else:
-            join_button = self.page.locator('button:has-text("Join now")')
-            switch_here_button = self.page.locator('button:has-text("Switch here")')
-            await self.pause_audio()
-            await self.pause_camera()
-            if await join_button.count() == 0 and await switch_here_button.count() > 0:
-                join_button = switch_here_button
-            await join_button.wait_for(timeout=10000)
-            await join_button.click()
-            print("🚀 Clicked 'Join now'")
+            await self.action_controller.pause_audio()
+            await self.action_controller.pause_camera()
+            await self.action_controller.click_join_meet_button()
         
         # --- FIXED LOBBY & ADMISSION WAIT LOGIC ---
         max_admission_wait = 300  # Wait up to 5 minutes for host to admit
@@ -420,8 +232,8 @@ class MeetBot:
 
         # Ensure mic is muted once inside the active meeting
         try:
-            if await self.is_mic_on():
-                await self.pause_audio()
+            if await self.action_controller.is_mic_on():
+                await self.action_controller.pause_audio()
         except Exception as e:
             print(f"⚠️ Warning checking mic status: {e}")
 
@@ -433,51 +245,7 @@ class MeetBot:
         self.participant_count = await self.get_participant_count()
         await self.start_participant_monitoring()
         print(f"Participant count: {self.participant_count}")       
-
-    async def dismiss_sign_in_popup(self):
-        """Dismisses the 'Sign in with your Google account' popup modal in Google Meet."""
-        print("🔍 Checking for 'Sign in with your Google account' popup...")
-
-        # Selector strategies targeting this exact modal structure
-        got_it_button = self.page.locator(
-            'button[jsname="EszDEe"], '  # Exact jsname from your HTML
-            ".KJktIb button:has-text('Got it'), "  # Scoped button inside popup wrapper
-            'button:has-text("Got it")'  # Fallback text locator
-        ).first
-
-        try:
-            # 1. Wait briefly for the button to appear
-            if await got_it_button.is_visible(timeout=3000):
-                print("💡 Found 'Got it' popup! Clicking button...")
-                # Click with force=True in case another transparent element overlays it slightly
-                await got_it_button.click(force=True)
-                await asyncio.sleep(0.5)
-                print("✅ Dismissed 'Got it' popup.")
-                return True
-        except Exception as e:
-            print(f"⚠️ Standard click on 'Got it' button skipped: {e}")
-
-        # 2. Fallback: If button click fails or modal persists, remove via direct DOM script
-        try:
-            await self.page.evaluate("""
-                () => {
-                    // Find container with class .KJktIb or containing 'Sign in with your Google account'
-                    const popup = document.querySelector('.KJktIb');
-                    if (popup) {
-                        // Try finding and clicking 'Got it' button via pure JS
-                        const btn = popup.querySelector('button');
-                        if (btn) btn.click();
-                        
-                        // Remove container and any parent dialog/overlay elements
-                        const parentModal = popup.closest('[role="dialog"]') || popup.parentElement;
-                        if (parentModal) parentModal.remove();
-                    }
-                }
-            """)
-            print("🧹 Cleaned up modal elements via JS injection.")
-        except Exception as e:
-            print(f"⚠️ JS cleanup error: {e}")
-            
+        
     async def start_captions(self):
         """Start caption scraping"""
         self.captions_segments = []
@@ -532,7 +300,6 @@ class MeetBot:
                 print(f"Error scraping captions: {e}")
                 await asyncio.sleep(2)
 
-
     async def stop_captions(self) -> List[Dict]:
         """Stops caption scraping and returns the deduplicated final transcript."""
         self.scraping_active = False
@@ -562,8 +329,313 @@ class MeetBot:
             if await button.count() > 0:
                 await button.click()
                 print("📝 Captions enabled")
+            else:
+                await self.page.keyboard.press("c")
+                print("Couldn't find captions trying keyboard shortcut")
         except Exception as e:
             print(f"Error enabling captions: {e}")
+
+    async def start_chat_scraping(self):
+        """Hard-fix chat scraper using continuous Python-side polling"""
+        self.chat_segments = []
+        self.chat_scraping_active = True
+
+        # 1. Open the Chat Panel explicitly
+        print("💬 Ensuring chat panel is open...")
+        for _ in range(5):
+            try:
+                chat_button = self.page.locator(
+                    '[aria-label="Show chat"], [aria-label*="chat" i], button:has-text("Chat")'
+                ).first
+                if await chat_button.count() > 0:
+                    await chat_button.click()
+                    await asyncio.sleep(1.5)
+                    break
+            except Exception:
+                await asyncio.sleep(1)
+
+        # Background task that polls Google Meet chat directly
+        async def poll_chat():
+            processed_ids = set()
+            print("🟢 Hard-fix chat polling loop started!")
+
+            while self.chat_scraping_active:
+                try:
+                    if not self.page or self.page.is_closed():
+                        break
+
+                    # Raw JS execution that extracts all current messages directly from DOM
+                    messages = await self.page.evaluate("""
+                        () => {
+                            const results = [];
+                            // Find all elements with data-message-id anywhere on page
+                            const msgNodes = document.querySelectorAll('[data-message-id]');
+
+                            msgNodes.forEach(node => {
+                                const id = node.getAttribute('data-message-id');
+                                if (!id || !id.includes('messages/')) return;
+
+                                // Extract Text: Try jsname="dTKtvb", fallback to innerText
+                                const textEl = node.querySelector('[jsname="dTKtvb"]') || node;
+                                const text = textEl ? textEl.innerText.trim() : '';
+
+                                if (!text) return;
+
+                                // Extract Sender: Walk up to parent block wrapper
+                                let sender = 'Unknown';
+                                let parent = node.parentElement;
+
+                                for (let i = 0; i < 8 && parent; i++) {
+                                    const nameEl = parent.querySelector('.poVWob');
+                                    if (nameEl && nameEl.innerText.trim()) {
+                                        sender = nameEl.innerText.trim();
+                                        break;
+                                    }
+                                    const imgEl = parent.querySelector('img[alt]');
+                                    if (imgEl && imgEl.getAttribute('alt')) {
+                                        sender = imgEl.getAttribute('alt').trim();
+                                        break;
+                                    }
+                                    parent = parent.parentElement;
+                                }
+
+                                results.push({ id, sender, text });
+                            });
+
+                            return results;
+                        }
+                    """)
+
+                    # Process new messages found during this poll tick
+                    for msg in messages:
+                        msg_id = msg["id"]
+                        if msg_id not in processed_ids:
+                            processed_ids.add(msg_id)
+
+                            formatted_msg = {
+                                "sender": msg["sender"],
+                                "text": msg["text"],
+                                "timestamp": datetime.now().isoformat(),
+                                "messageId": msg_id,
+                            }
+
+                            self.chat_segments.append(formatted_msg)
+                            print(
+                                f"💬 CHAT [{msg['sender']}]: {msg['text']}"
+                            )
+
+                            # Handle Commands
+                            text_lower = msg["text"].lower()
+
+                            if "stormee start recording" in text_lower:
+                                if not self.current_meeting_id:
+                                    mid = f"meeting-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                                    print(
+                                        f"🚀 Executing Command: Start Audio Recording -> {mid}"
+                                    )
+                                    asyncio.create_task(
+                                        self.start_audio_recording(mid)
+                                    )
+
+                            elif "stormee start caption recording" in text_lower:
+                                if not self.scraping_active:
+                                    print(
+                                        "🚀 Executing Command: Start Captions"
+                                    )
+                                    asyncio.create_task(self.start_captions())
+
+                            elif "stormee stop recording" in text_lower:
+                                if self.current_meeting_id:
+                                    print(
+                                        f"🛑 Executing Command: Stop Recording -> {self.current_meeting_id}"
+                                    )
+                                    asyncio.create_task(
+                                        self.stop_audio_recording()
+                                    )
+
+                    await asyncio.sleep(1)  # Poll every 1 second
+
+                except Exception as e:
+                    # Ignore minor navigation/evaluation glitches during screen changes
+                    await asyncio.sleep(2)
+
+        # Start the polling task
+        asyncio.create_task(poll_chat())
+
+    async def stop_chat_scraping(self) -> List[Dict]:
+        """Stop chat monitoring"""
+        self.chat_scraping_active = False
+        print("🔴 Chat monitoring stopped")
+        return self.chat_segments
+
+    async def get_participant_count(self) -> int:
+        """Get participant count"""
+        if not self.page:
+            return 0
+        
+        for attempt in range(1, 9):
+            try:
+                await self.page.wait_for_selector('[data-participant-id]', timeout=10000)
+                elements = await self.page.query_selector_all('[data-participant-id]')
+                count = len(elements)
+                print(f"👥 Participants: {count}")
+                return count
+            except:
+                if attempt < 8:
+                    await asyncio.sleep(5)
+                else:
+                    return 0
+        return 0
+
+    async def start_participant_monitoring(self):
+        """Monitor participants"""
+        if self.participant_task:
+            return
+        
+        async def monitor():
+            last = self.participant_count
+            while self.chat_scraping_active:
+                try:
+                    new = await self.get_participant_count()
+                    if new != last:
+                        print(f"🔄 Participants: {last} → {new}")
+                        self.participant_count = new
+                    last = new
+                    
+                    # if new == 1:
+                    #     print("⚠️ Only bot remains, leaving")
+                    #     await self.leave_meeting()
+                    #     break
+                    
+                    await asyncio.sleep(2)
+                except Exception as e:
+                    print(f"Monitor error: {e}")
+                    await asyncio.sleep(2)
+        
+        self.participant_task = asyncio.create_task(monitor())
+
+    async def stop_participant_monitoring(self):
+        """Stop monitoring"""
+        if self.participant_task:
+            self.participant_task.cancel()
+            try:
+                await self.participant_task
+            except asyncio.CancelledError:
+                pass
+
+    async def leave_meeting(self):
+        """Safely leaves the meeting room and closes browser contexts."""
+        if not self.page or self.page.is_closed():
+            print("⚠️ Page is already closed.")
+            return
+
+        print("🚪 Leaving meeting...")
+
+        try:
+            # 1. Stop background scraping tasks gracefully
+            for task_fn in [
+                self.stop_chat_scraping,
+                self.stop_audio_recording,
+                self.stop_captions,
+                self.stop_participant_monitoring,
+            ]:
+                try:
+                    if callable(task_fn):
+                        await task_fn()
+                except Exception as task_err:
+                    print(f"⚠️ Non-fatal error stopping background task: {task_err}")
+
+            try:
+                filename = await save_captions_to_docx(captions_segments=self.captions_segments)
+                if filename:
+                    response_json = await cw_caller.upload_file(
+                        file_path=filename,
+                        project_id=project_id,
+                        display_name="Meeting Chat"
+                    )
+                    if len(response_json.get("uploaded")) > 0:
+                        print(f"✅ Captions uploaded to CW: {response_json['uploaded'][0].get('fileId')}")
+                        cleanup_path = Path(filename)
+                        if cleanup_path.exists():
+                            cleanup_path.unlink()
+                            print(f"🗑️ Deleted local file: {cleanup_path}")
+                        # Use per-bot metadata if available, otherwise fall back to environment/defaults
+                        user_name = getattr(self, 'user_name', os.getenv('DEFAULT_USER_NAME', 'Unknown User'))
+                        user_email = getattr(self, 'user_email', os.getenv('DEFAULT_USER_EMAIL', 'no-reply@example.com'))
+                        proj_name = getattr(self, 'project_name', project_name)
+                        proj_id = getattr(self, 'project_id', project_id)
+                        meeting_title = getattr(self, 'meeting_title', f"Meeting Transcript {datetime.now().strftime('%Y-%m-%d')}")
+
+                        await email_sender.send_meeting_transcript_uploaded_email(
+                                    user_name=user_name,
+                                    user_email=user_email,
+                                    project_name=proj_name,
+                                    project_url=f"https://dev.appmod.ai/mode/Project%20Mode/projects/{proj_id}",
+                                    transcript_name=meeting_title,
+                                )
+            except Exception as docx_err:
+                print(f"⚠️ Failed to save captions to DOCX: {docx_err}")
+            # 2. Wake up hidden bottom control bar by wiggling mouse
+            try:
+                await self.page.mouse.move(200, 200)
+                await asyncio.sleep(0.5)
+            except Exception:
+                pass
+
+            # 3. Target Leave Button using jsname="CQylAd" or wildcard aria-label
+            print("🖱️ Clicking Leave call button...")
+            leave_clicked = await self.page.evaluate("""
+                () => {
+                    const btn = document.querySelector('[aria-label*="Leave call" i]') ||
+                                document.querySelector('[aria-label*="End call" i]');
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                }
+            """)
+
+            if not leave_clicked:
+                # Playwright Force Click Fallback
+                leave_button = self.page.locator(
+                    'button[aria-label*="Leave call" i]'
+                ).first
+                if await leave_button.count() > 0:
+                    await leave_button.click(force=True)
+
+            print("👋 Successfully clicked Leave Call.")
+            await asyncio.sleep(1.5)
+
+        except Exception as e:
+            print(f"⚠️ Error clicking leave button: {e}")
+
+        # 4. Clean up Playwright Contexts safely
+        finally:
+            try:
+                if self.page and not self.page.is_closed():
+                    await self.page.close()
+                if self.context:
+                    await self.context.close()
+                if hasattr(self, "playwright") and self.playwright:
+                    await self.playwright.stop()
+            except Exception as cleanup_err:
+                print(f"⚠️ Cleanup warning: {cleanup_err}")
+
+            # Reset state variables
+            self.page = None
+            self.context = None
+            self.browser = None
+            print("✅ Left meeting and cleaned up browser resources.")
+
+    async def play_audio(self):
+        try:
+            mic_button = self.page.locator('[aria-label*="microphone"], [aria-label*="mic"]').first
+            if await mic_button.count() > 0:
+                await mic_button.click()
+                print("🎤 Audio enabled.")
+        except Exception as e:
+            print(f"❌ Error enabling audio: {e}")
 
     async def start_audio_recording(self, meeting_id: str):
         """Start recording audio"""
@@ -823,291 +895,236 @@ class MeetBot:
             print("🔌 WebSocket disconnected")
             self.sio = None
             
-    async def start_chat_scraping(self):
-        """Hard-fix chat scraper using continuous Python-side polling"""
-        self.chat_segments = []
-        self.chat_scraping_active = True
 
-        # 1. Open the Chat Panel explicitly
-        print("💬 Ensuring chat panel is open...")
-        for _ in range(5):
-            try:
-                chat_button = self.page.locator(
-                    '[aria-label="Show chat"], [aria-label*="chat" i], button:has-text("Chat")'
-                ).first
-                if await chat_button.count() > 0:
-                    await chat_button.click()
-                    await asyncio.sleep(1.5)
-                    break
-            except Exception:
-                await asyncio.sleep(1)
+    async def join_as_guest(self, guest_name: str):
+        # 1. Dismiss "Sign in with your Google account" popup
+        print("1️⃣ Checking for popup modal...")
+        await self.page.evaluate("""
+            () => {
+                const gotItBtn = document.querySelector('button[jsname="EszDEe"]') || 
+                                Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Got it'));
+                if (gotItBtn) gotItBtn.click();
+                const modal = document.querySelector('.KJktIb');
+                if (modal) modal.remove();
+            }
+        """)
+        await asyncio.sleep(1)
 
-        # Background task that polls Google Meet chat directly
-        async def poll_chat():
-            processed_ids = set()
-            print("🟢 Hard-fix chat polling loop started!")
-
-            while self.chat_scraping_active:
-                try:
-                    if not self.page or self.page.is_closed():
-                        break
-
-                    # Raw JS execution that extracts all current messages directly from DOM
-                    messages = await self.page.evaluate("""
-                        () => {
-                            const results = [];
-                            // Find all elements with data-message-id anywhere on page
-                            const msgNodes = document.querySelectorAll('[data-message-id]');
-
-                            msgNodes.forEach(node => {
-                                const id = node.getAttribute('data-message-id');
-                                if (!id || !id.includes('messages/')) return;
-
-                                // Extract Text: Try jsname="dTKtvb", fallback to innerText
-                                const textEl = node.querySelector('[jsname="dTKtvb"]') || node;
-                                const text = textEl ? textEl.innerText.trim() : '';
-
-                                if (!text) return;
-
-                                // Extract Sender: Walk up to parent block wrapper
-                                let sender = 'Unknown';
-                                let parent = node.parentElement;
-
-                                for (let i = 0; i < 8 && parent; i++) {
-                                    const nameEl = parent.querySelector('.poVWob');
-                                    if (nameEl && nameEl.innerText.trim()) {
-                                        sender = nameEl.innerText.trim();
-                                        break;
-                                    }
-                                    const imgEl = parent.querySelector('img[alt]');
-                                    if (imgEl && imgEl.getAttribute('alt')) {
-                                        sender = imgEl.getAttribute('alt').trim();
-                                        break;
-                                    }
-                                    parent = parent.parentElement;
-                                }
-
-                                results.push({ id, sender, text });
-                            });
-
-                            return results;
-                        }
-                    """)
-
-                    # Process new messages found during this poll tick
-                    for msg in messages:
-                        msg_id = msg["id"]
-                        if msg_id not in processed_ids:
-                            processed_ids.add(msg_id)
-
-                            formatted_msg = {
-                                "sender": msg["sender"],
-                                "text": msg["text"],
-                                "timestamp": datetime.now().isoformat(),
-                                "messageId": msg_id,
-                            }
-
-                            self.chat_segments.append(formatted_msg)
-                            print(
-                                f"💬 CHAT [{msg['sender']}]: {msg['text']}"
-                            )
-
-                            # Handle Commands
-                            text_lower = msg["text"].lower()
-
-                            if "stormee start recording" in text_lower:
-                                if not self.current_meeting_id:
-                                    mid = f"meeting-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                                    print(
-                                        f"🚀 Executing Command: Start Audio Recording -> {mid}"
-                                    )
-                                    asyncio.create_task(
-                                        self.start_audio_recording(mid)
-                                    )
-
-                            elif "stormee start caption recording" in text_lower:
-                                if not self.scraping_active:
-                                    print(
-                                        "🚀 Executing Command: Start Captions"
-                                    )
-                                    asyncio.create_task(self.start_captions())
-
-                            elif "stormee stop recording" in text_lower:
-                                if self.current_meeting_id:
-                                    print(
-                                        f"🛑 Executing Command: Stop Recording -> {self.current_meeting_id}"
-                                    )
-                                    asyncio.create_task(
-                                        self.stop_audio_recording()
-                                    )
-
-                    await asyncio.sleep(1)  # Poll every 1 second
-
-                except Exception as e:
-                    # Ignore minor navigation/evaluation glitches during screen changes
-                    await asyncio.sleep(2)
-
-        # Start the polling task
-        asyncio.create_task(poll_chat())
-
-    async def stop_chat_scraping(self) -> List[Dict]:
-        """Stop chat monitoring"""
-        self.chat_scraping_active = False
-        print("🔴 Chat monitoring stopped")
-        return self.chat_segments
-
-    async def get_participant_count(self) -> int:
-        """Get participant count"""
-        if not self.page:
-            return 0
-        
-        for attempt in range(1, 9):
-            try:
-                await self.page.wait_for_selector('[data-participant-id]', timeout=10000)
-                elements = await self.page.query_selector_all('[data-participant-id]')
-                count = len(elements)
-                print(f"👥 Participants: {count}")
-                return count
-            except:
-                if attempt < 8:
-                    await asyncio.sleep(5)
-                else:
-                    return 0
-        return 0
-
-    async def start_participant_monitoring(self):
-        """Monitor participants"""
-        if self.participant_task:
-            return
-        
-        async def monitor():
-            last = self.participant_count
-            while self.chat_scraping_active:
-                try:
-                    new = await self.get_participant_count()
-                    if new != last:
-                        print(f"🔄 Participants: {last} → {new}")
-                        self.participant_count = new
-                    last = new
-                    
-                    # if new == 1:
-                    #     print("⚠️ Only bot remains, leaving")
-                    #     await self.leave_meeting()
-                    #     break
-                    
-                    await asyncio.sleep(2)
-                except Exception as e:
-                    print(f"Monitor error: {e}")
-                    await asyncio.sleep(2)
-        
-        self.participant_task = asyncio.create_task(monitor())
-
-    async def stop_participant_monitoring(self):
-        """Stop monitoring"""
-        if self.participant_task:
-            self.participant_task.cancel()
-            try:
-                await self.participant_task
-            except asyncio.CancelledError:
-                pass
-
-    async def leave_meeting(self):
-        """Safely leaves the meeting room and closes browser contexts."""
-        if not self.page or self.page.is_closed():
-            print("⚠️ Page is already closed.")
-            return
-
-        print("🚪 Leaving meeting...")
-
-        try:
-            # 1. Stop background scraping tasks gracefully
-            for task_fn in [
-                self.stop_chat_scraping,
-                self.stop_audio_recording,
-                self.stop_captions,
-                self.stop_participant_monitoring,
-            ]:
-                try:
-                    if callable(task_fn):
-                        await task_fn()
-                except Exception as task_err:
-                    print(f"⚠️ Non-fatal error stopping background task: {task_err}")
-
-            try:
-                filename = await save_captions_to_docx(captions_segments=self.captions_segments)
-                if filename:
-                    response_json = await cw_caller.upload_file(
-                        file_path=filename,
-                        project_id=project_id,
-                        display_name="Meeting Chat"
-                    )
-                    if len(response_json.get("uploaded")) > 0:
-                        print(f"✅ Captions uploaded to CW: {response_json['uploaded'][0].get('fileId')}")
-                        cleanup_path = Path(filename)
-                        if cleanup_path.exists():
-                            cleanup_path.unlink()
-                            print(f"🗑️ Deleted local file: {cleanup_path}")
-                        await email_sender.send_meeting_transcript_uploaded_email(
-                                    user_name="Swikrit Shukla",
-                                    user_email="swikrit.shukla@techolution.com",
-                                    project_name=project_name,
-                                    project_url=f"https://dev.appmod.ai/mode/Project%20Mode/projects/{project_id}",
-                                    transcript_name="Meeting Transcript 2026-06-15",
-                                )
-            except Exception as docx_err:
-                print(f"⚠️ Failed to save captions to DOCX: {docx_err}")
-            # 2. Wake up hidden bottom control bar by wiggling mouse
-            try:
-                await self.page.mouse.move(200, 200)
-                await asyncio.sleep(0.5)
-            except Exception:
-                pass
-
-            # 3. Target Leave Button using jsname="CQylAd" or wildcard aria-label
-            print("🖱️ Clicking Leave call button...")
-            leave_clicked = await self.page.evaluate("""
+        # 2. Wait for Name Input to exist in DOM
+        print("2️⃣ Locating guest name input...")
+        input_found = False
+        for _ in range(10):  # Retry up to 10 seconds
+            input_found = await self.page.evaluate("""
                 () => {
-                    const btn = document.querySelector('[aria-label*="Leave call" i]') ||
-                                document.querySelector('[aria-label*="End call" i]');
-                    if (btn) {
-                        btn.click();
-                        return true;
-                    }
-                    return false;
+                    const el = document.querySelector('input[jsname="YPqjbf"]') || 
+                            document.querySelector('input[aria-label="Your name"]') ||
+                            document.querySelector('input[placeholder="Your name"]');
+                    return el !== null;
                 }
             """)
+            if input_found:
+                break
+            await asyncio.sleep(1)
 
-            if not leave_clicked:
-                # Playwright Force Click Fallback
-                leave_button = self.page.locator(
-                    'button[aria-label*="Leave call" i]'
-                ).first
-                if await leave_button.count() > 0:
-                    await leave_button.click(force=True)
+        if not input_found:
+            print("❌ Could not locate Guest Name input field.")
+            await self.page.screenshot(path="error_no_input.png")
+            return False
 
-            print("👋 Successfully clicked Leave Call.")
-            await asyncio.sleep(1.5)
+        # 3. Focus, Clear, Type Name, and Trigger React State
+        print(f"3️⃣ Typing guest name: '{guest_name}'...")
 
+        # Focus the input element via Playwright
+        name_input = self.page.locator(
+            'input[jsname="YPqjbf"], input[aria-label="Your name"]'
+        ).first
+        await name_input.focus()
+        await asyncio.sleep(0.3)
+
+        # Clear field
+        await self.page.keyboard.press("Control+A")
+        await self.page.keyboard.press("Backspace")
+
+        # Type sequentially character by character to trigger trusted native events
+        await self.page.keyboard.type(guest_name, delay=60)
+        await asyncio.sleep(0.5)
+
+        # Dispatch final blur/change events via JS to be 100% sure React updates
+        await self.page.evaluate("""
+            () => {
+                const el = document.querySelector('input[jsname="YPqjbf"]') || 
+                        document.querySelector('input[aria-label="Your name"]');
+                if (el) {
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                }
+            }
+        """)
+        await asyncio.sleep(1)
+
+        # 4. Click the Join / Ask to join Button
+        print("4️⃣ Attempting to click Join button...")
+        clicked = await self.page.evaluate("""
+            () => {
+                const joinBtn = document.querySelector('button[aria-label*="Ask to join"]') ||
+                                document.querySelector('button[aria-label*="Join now"]') ||
+                                Array.from(document.querySelectorAll('button')).find(b => {
+                                    const txt = b.textContent.trim().toLowerCase();
+                                    return txt.includes('ask to join') || txt.includes('join now');
+                                });
+
+                if (joinBtn) {
+                    joinBtn.disabled = false;
+                    joinBtn.removeAttribute('disabled');
+                    joinBtn.click();
+                    return true;
+                }
+                return false;
+            }
+        """)
+
+        if not clicked:
+            print("⚠️ JS click failed, attempting Playwright locator click...")
+            join_btn = self.page.locator(
+                'button:has-text("Ask to join"), button:has-text("Join now")'
+            ).first
+            await join_btn.click(force=True)
+
+        print("✅ Guest join sequence executed successfully!")
+        await self.page.screenshot(path="join_attempt.png")
+        return True
+
+    async def dismiss_sign_in_popup(self):
+        """Dismisses the 'Sign in with your Google account' popup modal in Google Meet."""
+        print("🔍 Checking for 'Sign in with your Google account' popup...")
+
+        # Selector strategies targeting this exact modal structure
+        got_it_button = self.page.locator(
+            'button[jsname="EszDEe"], '  # Exact jsname from your HTML
+            ".KJktIb button:has-text('Got it'), "  # Scoped button inside popup wrapper
+            'button:has-text("Got it")'  # Fallback text locator
+        ).first
+
+        try:
+            # 1. Wait briefly for the button to appear
+            if await got_it_button.is_visible(timeout=3000):
+                print("💡 Found 'Got it' popup! Clicking button...")
+                # Click with force=True in case another transparent element overlays it slightly
+                await got_it_button.click(force=True)
+                await asyncio.sleep(0.5)
+                print("✅ Dismissed 'Got it' popup.")
+                return True
         except Exception as e:
-            print(f"⚠️ Error clicking leave button: {e}")
+            print(f"⚠️ Standard click on 'Got it' button skipped: {e}")
 
-        # 4. Clean up Playwright Contexts safely
-        finally:
-            try:
-                if self.page and not self.page.is_closed():
-                    await self.page.close()
-                if self.context:
-                    await self.context.close()
-                if hasattr(self, "playwright") and self.playwright:
-                    await self.playwright.stop()
-            except Exception as cleanup_err:
-                print(f"⚠️ Cleanup warning: {cleanup_err}")
+        # 2. Fallback: If button click fails or modal persists, remove via direct DOM script
+        try:
+            await self.page.evaluate("""
+                () => {
+                    // Find container with class .KJktIb or containing 'Sign in with your Google account'
+                    const popup = document.querySelector('.KJktIb');
+                    if (popup) {
+                        // Try finding and clicking 'Got it' button via pure JS
+                        const btn = popup.querySelector('button');
+                        if (btn) btn.click();
+                        
+                        // Remove container and any parent dialog/overlay elements
+                        const parentModal = popup.closest('[role="dialog"]') || popup.parentElement;
+                        if (parentModal) parentModal.remove();
+                    }
+                }
+            """)
+            print("🧹 Cleaned up modal elements via JS injection.")
+        except Exception as e:
+            print(f"⚠️ JS cleanup error: {e}")
 
-            # Reset state variables
-            self.page = None
-            self.context = None
-            self.browser = None
-            print("✅ Left meeting and cleaned up browser resources.")
+    async def _launch_browser_with_fallback(self):
+        """Launch browser with automatic fallback to Chrome on failure"""
+        is_macos = platform.system() == "Darwin"
+        
+        # Try Chromium first
+        try:
+            print("🌐 Attempting to launch Chromium...")
+            self.browser = await self.playwright.chromium.launch(
+                headless=False,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--start-maximized",
+                    "--use-fake-device-for-media-stream",
+                    "--use-fake-ui-for-media-stream",
+                ],
+                timeout=10000  # 10 second timeout
+            )
+            self.browser_type = "chromium"
+            print("✅ Chromium launched successfully")
+            return
+        except Exception as e:
+            print(f"⚠️ Chromium failed: {e}")
+            
+            # On macOS, try system Chrome
+            if is_macos:
+                try:
+                    print("🍎 Trying system Chrome...")
+                    self.browser = await self.playwright.chromium.launch(
+                        channel="chrome",
+                        headless=False,
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--start-maximized",
+                            "--use-fake-device-for-media-stream",
+                            "--use-fake-ui-for-media-stream",
+                            "--disable-gpu",
+                        ],
+                        timeout=10000
+                    )
+                    self.browser_type = "chrome"
+                    print("✅ System Chrome launched successfully")
+                    return
+                except Exception as chrome_error:
+                    print(f"❌ Chrome also failed: {chrome_error}")
+                    print("💡 Install Chrome from: https://www.google.com/chrome/")
+            
+            # Last resort: raise the original error
+            raise Exception(f"Failed to launch browser: {e}")
 
+    
 # Global instance
-meet_bot = MeetBot()
+# Manager for multiple MeetBot instances keyed by meeting ID
+meet_bots: Dict[str, MeetBot] = {}
+
+async def create_bot_for(meeting_id: str, meeting_url: str, *, user_name: Optional[str]=None, user_email: Optional[str]=None, project_id: Optional[str]=None, project_name: Optional[str]=None, meeting_title: Optional[str]=None) -> MeetBot:
+    """Create and register a MeetBot for a specific meeting_id. Starts join in background."""
+    if meeting_id in meet_bots:
+        return meet_bots[meeting_id]
+
+    bot = MeetBot()
+    # Attach metadata to the bot instance for later use (emails, uploads, etc.)
+    bot.user_name = user_name
+    bot.user_email = user_email
+    bot.project_id = project_id
+    bot.project_name = project_name
+    bot.meeting_title = meeting_title
+
+    meet_bots[meeting_id] = bot
+
+    # Start join in background so API can return quickly
+    asyncio.create_task(bot.join_meeting(meeting_url))
+    return bot
+
+
+def get_bot(meeting_id: str) -> Optional[MeetBot]:
+    return meet_bots.get(meeting_id)
+
+
+async def remove_bot(meeting_id: str):
+    bot = meet_bots.get(meeting_id)
+    if not bot:
+        return
+    try:
+        await bot.leave_meeting()
+    except Exception as e:
+        print(f"⚠️ Error removing bot for {meeting_id}: {e}")
+    finally:
+        if meeting_id in meet_bots:
+            del meet_bots[meeting_id]
