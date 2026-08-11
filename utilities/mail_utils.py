@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 import httpx
 from utilities.env_config import config
 
@@ -18,23 +19,24 @@ class EmailGenerator:
             logger.error("BACKEND_URL environment variable not set")
             raise
 
-    def generate_meeting_transcript_uploaded_email(
+    def generate_meeting_file_uploaded_email(
         self,
         user_name: str,
         user_email: str,
         project_name: str,
         project_url: str,
-        transcript_name: str,
+        meeting_title: str,
+        file_type: Optional[str] = "transcript"
     ):
         """
-        Generates an email notification when a meeting transcript
+        Generates an email notification when a meeting file
         has been uploaded to a project.
 
         Returns:
             tuple: (subject, html_body)
         """
-
-        subject = f"Meeting Transcript Uploaded: {transcript_name}"
+        file_type_capitalized = file_type.capitalize()
+        subject = f"Meeting {file_type_capitalized} Uploaded: {meeting_title}"
         user_initial = (user_name[:1] or "U").upper()
 
         html = f"""
@@ -62,7 +64,7 @@ class EmailGenerator:
                     margin-bottom: 8px;
                     letter-spacing: 0.3px;
                 ">
-                    Meeting Transcript
+                    Meeting {file_type_capitalized}
                 </div>
 
                 <div style="
@@ -71,7 +73,7 @@ class EmailGenerator:
                     color: #111;
                     margin-bottom: 10px;
                 ">
-                    Meeting Transcript Uploaded
+                    Meeting {file_type_capitalized} Uploaded
                 </div>
 
                 <div style="
@@ -80,7 +82,7 @@ class EmailGenerator:
                     color: #333;
                     margin-bottom: 24px;
                 ">
-                    <strong>{transcript_name}</strong>
+                    <strong>{meeting_title}</strong>
                 </div>
 
                 <div style="
@@ -131,8 +133,8 @@ class EmailGenerator:
                             </span>
 
                             <span style="vertical-align: middle;">
-                                Your meeting transcript
-                                <strong>{transcript_name}</strong>
+                                Your meeting {file_type}
+                                <strong>{meeting_title}</strong>
                                 has been successfully uploaded to the project
                                 <strong>{project_name}</strong>.
                             </span>
@@ -144,7 +146,7 @@ class EmailGenerator:
                             margin-top: 8px;
                             line-height: 1.5;
                         ">
-                            You can open the project to review the transcript
+                            You can open the project to review the {file_type}
                             and continue working with the meeting content.
                         </div>
 
@@ -175,7 +177,7 @@ class EmailGenerator:
                     margin-bottom: 28px;
                     line-height: 1.6;
                 ">
-                    The meeting transcript is now available in your project.
+                    The meeting {file_type} is now available in your project.
                     You can open the project using the button above.
                 </div>
 
@@ -223,52 +225,59 @@ class EmailSender:
         logger.info(
             f"Sending email to={to_email}, cc={cc}, subject={subject}"
         )
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                )
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                endpoint,
-                json=payload,
-            )
+            if response.status_code == 200:
+                logger.info(
+                    f"Meeting file email sent successfully to={to_email}"
+                )
+            else:
+                logging.error(
+                    f"Meeting file email failed "
+                    f"to={to_email} with status={response.status_code}, "
+                    f"response={response.text}"
+                )
 
-        if response.status_code == 200:
-            logger.info(
-                f"Meeting transcript email sent successfully to={to_email}"
-            )
-        else:
+            return response
+        except Exception as e:
             logging.error(
-                f"Meeting transcript email failed "
-                f"to={to_email} with status={response.status_code}, "
-                f"response={response.text}"
+                f"Meeting file email failed "
+                f"to={to_email}: {str(e)}"
             )
-
-        return response
-
-    async def send_meeting_transcript_uploaded_email(
+ 
+    async def send_meeting_file_uploaded_email(
         self,
         user_name: str,
         user_email: str,
         project_name: str,
         project_url: str,
-        transcript_name: str,
+        meeting_title: str,
+        file_type: str
     ):
         """
-        Sends meeting transcript uploaded notification to the user.
+        Sends meeting file uploaded notification to the user.
         """
 
         logger.info(
-            f"Preparing meeting transcript notification "
-            f"for user={user_email}, transcript={transcript_name}"
+            f"Preparing meeting {file_type} notification "
+            f"for user={user_email}, meeting_title={meeting_title}"
         )
 
         generator = EmailGenerator()
 
         subject, html_body = (
-            generator.generate_meeting_transcript_uploaded_email(
+            generator.generate_meeting_file_uploaded_email(
                 user_name=user_name,
                 user_email=user_email,
                 project_name=project_name,
                 project_url=project_url,
-                transcript_name=transcript_name,
+                meeting_title=meeting_title,
+                file_type=file_type
             )
         )
 
@@ -285,11 +294,11 @@ email_sender = EmailSender()
 
 #     async def test_email():
 #         sender = EmailSender()
-#         await sender.send_meeting_transcript_uploaded_email(
+#         await sender.send_meeting_file_uploaded_email(
 #             user_name="John Doe",
 #             user_email="swikrit.shukla@techolution.com",
 #             project_name="Project Alpha",
 #             project_url="https://dev.appmod.ai/projects/12345",
-#             transcript_name="Meeting Transcript 2026-06-15",
+#             meeting_title="Meeting Test 2026-06-15",
 #         )
 #     asyncio.run(test_email())

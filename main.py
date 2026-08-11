@@ -11,6 +11,7 @@ from routes.stormee_meet_bot_routes import router as meet_router
 load_dotenv()
 
 # Configure centralized logging
+from services.websocket_events import register_websocket_handlers
 from utilities.logging_config import configure_logging
 from utilities.env_config import config
 
@@ -61,8 +62,8 @@ async def get_openapi():
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins='*',  # Allow connections from any origin - adjust for production
-    logger=True,
-    engineio_logger=True
+    logger=False,
+    engineio_logger=False
 )
 
 # Wrap FastAPI app with Socket.IO
@@ -70,41 +71,7 @@ socket_app = socketio.ASGIApp(
     sio,
     other_asgi_app=app
 )
-
-# WebSocket connection handler
-@sio.event
-async def connect(sid, environ):
-    """Handle client connection"""
-    print(f"🔌 A client connected via WebSocket: {sid}")
-
-@sio.event
-async def disconnect(sid):
-    """Handle client disconnection"""
-    print(f"🔌 Client disconnected: {sid}")
-
-@sio.event
-async def audioChunk(sid, data):
-    """Handle incoming audio chunks from the bot"""
-    meeting_id = data.get('meetingId')
-    chunk_id = data.get('chunkId')
-    timestamp = data.get('timestamp')
-    audio_blob = data.get('audioBlob')
-    audio_size = len(audio_blob) if audio_blob else "N/A"
-    
-    print(f"🎵 Received audio chunk from meeting {meeting_id}, chunk ID: {chunk_id}")
-    print(f"📅 Timestamp: {timestamp}")
-    print(f"📊 Audio data size: {audio_size} bytes")
-    
-    # TODO: Process the audio chunk (save to disk, forward to analysis service, etc.)
-    # Example implementations:
-    # - save_audio_chunk(meeting_id, chunk_id, timestamp, audio_blob)
-    # - forward_to_transcription_service(data)
-    # - store_in_database(data)
-
-@sio.event
-async def error(sid, data):
-    """Handle connection errors"""
-    print(f"❌ WebSocket error for client {sid}: {data}")
+register_websocket_handlers(sio=sio)
 
 
 if __name__ == "__main__":

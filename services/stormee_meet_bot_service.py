@@ -5,6 +5,7 @@ import platform
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
+import uuid
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import socketio
 from dotenv import load_dotenv
@@ -18,6 +19,8 @@ from utilities.cw_utils import cw_caller
 from utilities.mail_utils import email_sender
 from utilities.meet_utils.google_meet.meet_action_controller import ActionController
 from utilities.env_config import config
+from services.websocket_manager import WebSocketManager
+from services.audio_queue_manager import AudioQueueManager
 from utilities.error_handler import (
     log_exception,
     handle_browser_error,
@@ -55,8 +58,15 @@ class MeetBot:
         self.caption_task: Optional[asyncio.Task] = None
         self.participant_task: Optional[asyncio.Task] = None
         
-        # WebSocket
-        self.sio: Optional[socketio.AsyncClient] = None
+        # WebSocket and Audio Buffering
+        self.websocket_manager = WebSocketManager()
+        self.audio_queue_manager = AudioQueueManager.get_instance(
+            max_chunks=config.get('AUDIO_QUEUE_MAX_CHUNKS'),
+            max_memory_bytes=config.get('AUDIO_QUEUE_MAX_MEMORY_MB') * 1024 * 1024
+        )
+        
+        # Register reconnection success callback
+        self.websocket_manager.set_on_reconnect_success(self._on_websocket_reconnect)
 
     async def ensure_auth_session(self, meeting_url: str):
         """Initialize browser with a persistent Google Chrome profile"""
@@ -256,9 +266,9 @@ class MeetBot:
             logger.warning(f"Warning checking mic status: {e}")
 
         # Start post-admission services
-        await self.start_chat_scraping()
-        logger.info(f"Joined meeting using {self.browser_type}")
-        await self.start_captions()
+        # await self.start_chat_scraping()
+        # logger.info(f"Joined meeting using {self.browser_type}")
+        # await self.start_captions()
 
         self.participant_count = await self.get_participant_count()
         await self.start_participant_monitoring()
@@ -563,50 +573,52 @@ class MeetBot:
                 except Exception as task_err:
                     logger.warning(f"Non-fatal error stopping background task: {task_err}")
 
-            try:
-                # Use per-bot metadata if available, otherwise fall back to environment/defaults
-                if hasattr(self, 'user_name') and self.user_name:
-                    user_name = self.user_name
-                else:
-                    try:
-                        user_name = config.get('DEFAULT_USER_NAME')
-                    except ValueError:
-                        user_name = 'Unknown User'
+            # try:
+            #     # Use per-bot metadata if available, otherwise fall back to environment/defaults
+            #     if hasattr(self, 'user_name') and self.user_name:
+            #         user_name = self.user_name
+            #     else:
+            #         try:
+            #             user_name = config.get('DEFAULT_USER_NAME')
+            #         except ValueError:
+            #             user_name = 'Unknown User'
                 
-                if hasattr(self, 'user_email') and self.user_email:
-                    user_email = self.user_email
-                else:
-                    try:
-                        user_email = config.get('DEFAULT_USER_EMAIL')
-                    except ValueError:
-                        user_email = 'no-reply@example.com'
-                proj_name = getattr(self, 'project_name', project_name)
-                proj_id = getattr(self, 'project_id', project_id)
-                meeting_title = getattr(self, 'meeting_title', f"Meeting {datetime.now().strftime('%Y-%m-%d')}")
+            #     if hasattr(self, 'user_email') and self.user_email:
+            #         user_email = self.user_email
+            #     else:
+            #         try:
+            #             user_email = config.get('DEFAULT_USER_EMAIL')
+            #         except ValueError:
+            #             user_email = 'no-reply@example.com'
+            #     proj_name = getattr(self, 'project_name', project_name)
+            #     proj_id = getattr(self, 'project_id', project_id)
+            #     meeting_title = getattr(self, 'meeting_title', f"Meeting {datetime.now().strftime('%Y-%m-%d')}")
 
-                filename = await save_captions_to_docx(captions_segments=self.captions_segments, title = meeting_title)
-                if filename:
-                    response_json = await cw_caller.upload_file(
-                        file_path=filename,
-                        project_id=project_id,
-                        display_name=meeting_title
-                    )
-                    if len(response_json.get("uploaded")) > 0:
-                        logger.info(f"Captions uploaded to CW: {response_json['uploaded'][0].get('name')}")
-                        cleanup_path = Path(filename)
-                        if cleanup_path.exists():
-                            cleanup_path.unlink()
-                            logger.debug(f"Deleted local file: {cleanup_path}")
+            #     filename = await save_captions_to_docx(captions_segments=self.captions_segments, title = meeting_title)
+            #     if filename:
+            #         response_json = await cw_caller.upload_file(
+            #             file_path=filename,
+            #             project_id=project_id,
+            #             display_name=meeting_title
+            #         )
+            #         if len(response_json.get("uploaded")) > 0:
+            #             logger.info(f"Captions uploaded to CW: {response_json['uploaded'][0].get('name')}")
+            #             cleanup_path = Path(filename)
+            #             if cleanup_path.exists():
+            #                 cleanup_path.unlink()
+            #                 logger.debug(f"Deleted local file: {cleanup_path}")
 
-                        await email_sender.send_meeting_transcript_uploaded_email(
-                                    user_name=user_name,
-                                    user_email=user_email,
-                                    project_name=proj_name,
-                                    project_url=f"https://dev.appmod.ai/mode/Project%20Mode/projects/{proj_id}",
-                                    transcript_name=meeting_title,
-                                )
-            except Exception as docx_err:
-                logger.warning(f"Failed to save captions to DOCX: {docx_err}")
+            #             await email_sender.send_meeting_file_uploaded_email(
+            #                         user_name=user_name,
+            #                         user_email=user_email,
+            #                         project_name=proj_name,
+            #                         project_url=f"https://dev.appmod.ai/mode/Project%20Mode/projects/{proj_id}",
+            #                         meeting_title=meeting_title,
+            #                         file_type="transcript"
+            #                     )
+            # except Exception as docx_err:
+            #     logger.warning(f"Failed to save captions to DOCX: {docx_err}")
+            
             # 2. Wake up hidden bottom control bar by wiggling mouse
             try:
                 await self.page.mouse.move(200, 200)
@@ -681,37 +693,17 @@ class MeetBot:
         
         logger.info(f"Starting audio recording for meeting: {meeting_id}")
         
-        # WebSocket connection
-        if not self.sio or not self.sio.connected:
-            self.sio = socketio.AsyncClient(
-                logger=False,
-                engineio_logger=False,
-                reconnection=True,
-                reconnection_attempts=5,
-                reconnection_delay=1
-            )
-            
-            @self.sio.event
-            async def connect():
-                logger.info("WebSocket connected")
-            
-            @self.sio.event
-            async def disconnect():
-                logger.info("WebSocket disconnected")
-            
-            @self.sio.event
-            async def connect_error(data):
-                logger.error(f"WebSocket connection error: {data}")
-            
-            try:
-                ws_url = "http://localhost:5000"
-                logger.debug(f"Connecting to WebSocket at {ws_url}")
-                await self.sio.connect(ws_url)
-                await asyncio.sleep(0.5)
-                logger.info("WebSocket connected successfully")
-            except Exception as e:
-                logger.warning(f"WebSocket connection failed: {e}")
-                logger.warning("Audio will be saved locally, no real-time streaming")
+        # WebSocket connection - establish connection with configured URL
+        ws_url = config.get('WEBSOCKET_URL')
+        await self.websocket_manager.connect(ws_url)
+        
+        # Log connection state
+        connection_state = self.websocket_manager.get_connection_state()
+        if connection_state == "active":
+            logger.info(f"WebSocket connected with state: {connection_state}")
+        else:
+            logger.warning(f"WebSocket not connected; state: {connection_state}")
+            logger.warning("Audio will be saved locally, no real-time streaming")
         
         # Check if function is already exposed
         is_function_exposed = await self.page.evaluate("""
@@ -826,16 +818,53 @@ class MeetBot:
         
         self.audio_chunks[meeting_id].append(chunk)
         
-        # Send via WebSocket if connected
-        if self.sio and self.sio.connected:
+        # Send via WebSocket if connected; otherwise queue for later transmission
+        if self.websocket_manager.is_connected():
             try:
-                await self.sio.emit('audioChunk', chunk)
+                sio = self.websocket_manager.get_instance()
+                await sio.emit('audioChunk', chunk)
                 logger.debug(f"Sent to WebSocket: {chunk_id}")
             except Exception as e:
                 logger.warning(f"WebSocket send failed: {e}")
-                logger.debug("Chunk stored locally only")
+                # Enqueue for retry on reconnection
+                self.audio_queue_manager.enqueue(chunk)
+                logger.debug(f"Chunk queued for later transmission: {chunk_id}")
         else:
-            logger.debug("WebSocket not connected, storing locally only")
+            # WebSocket not connected; enqueue chunk for transmission on reconnect
+            self.audio_queue_manager.enqueue(chunk)
+            queue_stats = self.audio_queue_manager.get_stats()
+            logger.debug(
+                f"WebSocket not connected, chunk queued: {chunk_id}; "
+                f"queue size={queue_stats['queue_size']}, memory={queue_stats['memory_bytes']} bytes"
+            )
+    
+    async def _on_websocket_reconnect(self) -> None:
+        """Callback invoked on successful WebSocket reconnection.
+        
+        Drains all buffered audio chunks from the queue and transmits them
+        via the re-established WebSocket connection.
+        """
+        logger.info("WebSocket reconnected; draining buffered audio chunks")
+        
+        buffered_chunks = self.audio_queue_manager.dequeue_all()
+        if not buffered_chunks:
+            logger.debug("No buffered chunks to drain")
+            return
+        
+        logger.info(f"Draining {len(buffered_chunks)} buffered chunks")
+        sio = self.websocket_manager.get_instance()
+        
+        for chunk in buffered_chunks:
+            try:
+                chunk_id = chunk.get('chunkId')
+                await sio.emit('audioChunk', chunk)
+                logger.debug(f"Drained buffered chunk: {chunk_id}")
+            except Exception as e:
+                logger.error(f"Failed to drain buffered chunk {chunk.get('chunkId')}: {e}")
+                # Re-queue chunk if transmission fails
+                self.audio_queue_manager.enqueue(chunk)
+        
+        logger.info(f"Audio queue drain complete; {self.audio_queue_manager.get_queue_size()} chunks remaining")
     
     async def save_audio(self, meeting_id: str):
         """Save audio to file"""
@@ -858,29 +887,69 @@ class MeetBot:
         if len(audio_data) == 0:
             logger.warning(f"No audio data in chunks for {meeting_id}")
             return
-        
+        rec_id = uuid.uuid4()
         # Save as WebM
-        webm_path = f"{meeting_id.replace('/', '_').replace(':', '_')}.webm"
+        webm_path = f"{meeting_id.replace('/', '_').replace(':', '_')}_{rec_id}.webm"
         with open(webm_path, 'wb') as f:
             f.write(audio_data)
         logger.info(f"Saved {webm_path} ({len(audio_data)} bytes)")
         
-        # Convert to WAV using ffmpeg
-        wav_path = f"{meeting_id.replace('/', '_').replace(':', '_')}.wav"
+        # Convert to MP3 using ffmpeg
+        mp3_path = f"{meeting_id.replace('/', '_').replace(':', '_')}_{rec_id}.mp3"
         try:
             process = await asyncio.create_subprocess_exec(
-                'ffmpeg', '-y', '-i', webm_path, 
-                '-acodec', 'pcm_s16le',
-                '-ar', '48000', 
-                '-ac', '2', 
-                wav_path,
+                'ffmpeg', '-y',
+                '-i', webm_path,
+                '-acodec', 'libmp3lame',
+                '-b:a', '64k',
+                '-ar', '16000',
+                '-ac', '1',
+                mp3_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
             
             if process.returncode == 0:
-                logger.info(f"Converted to {wav_path}")
+                logger.info(f"Converted to {mp3_path}")
+                if hasattr(self, 'user_name') and self.user_name:
+                    user_name = self.user_name
+                else:
+                    try:
+                        user_name = config.get('DEFAULT_USER_NAME')
+                    except ValueError:
+                        user_name = 'Unknown User'
+                
+                if hasattr(self, 'user_email') and self.user_email:
+                    user_email = self.user_email
+                else:
+                    try:
+                        user_email = config.get('DEFAULT_USER_EMAIL')
+                    except ValueError:
+                        user_email = 'no-reply@example.com'
+                proj_name = getattr(self, 'project_name', project_name)
+                proj_id = getattr(self, 'project_id', project_id)
+                meeting_title = getattr(self, 'meeting_title', f"Meeting {datetime.now().strftime('%Y-%m-%d')}")
+
+                response_json = await cw_caller.upload_file(
+                        file_path=mp3_path,
+                        project_id=proj_id,
+                        # display_name=meeting_title
+                    )
+                if len(response_json.get("uploaded")) > 0:
+                    logger.info(f"Recording uploaded to CW: {response_json['uploaded'][0].get('name')}")
+                    cleanup_path = Path(mp3_path)
+                    if cleanup_path.exists():
+                        cleanup_path.unlink()
+                        logger.info(f"Deleted local mp3 file: {cleanup_path}")
+                    await email_sender.send_meeting_file_uploaded_email(
+                                    user_name=user_name,
+                                    user_email=user_email,
+                                    project_name=proj_name,
+                                    project_url=f"https://dev.appmod.ai/mode/Project%20Mode/projects/{proj_id}",
+                                    meeting_title=meeting_title,
+                                    file_type = "recording"
+                                )
                 os.remove(webm_path)
                 logger.debug(f"Removed temporary {webm_path}")
             else:
@@ -896,11 +965,12 @@ class MeetBot:
         logger.debug(f"Cleaned up chunks for {meeting_id}")
 
     async def stop_audio_recording(self):
-        """Stop recording"""
+        """Stop recording and emit recordingEnded event for streaming storage systems"""
         if not self.page:
             return
         
-        logger.info("Stopping recording")
+        meeting_id = self.current_meeting_id
+        logger.info(f"Stopping recording for meeting: {meeting_id}")
         
         # Stop the MediaRecorder
         await self.page.evaluate("""
@@ -916,16 +986,44 @@ class MeetBot:
         logger.debug("Waiting for final audio chunks")
         await asyncio.sleep(2)  # Give time for final chunk to process
         
+        # Emit recordingEnded event via WebSocket to notify external streaming storage systems
+        # This allows streaming storage backends to finalize chunk processing and close file handles
+        if self.websocket_manager.is_connected():
+            try:
+                sio = self.websocket_manager.get_instance()
+                queued_chunks = self.audio_queue_manager.get_queue_size()
+                event_data = {
+                    'meetingId': meeting_id,
+                    'timestamp': asyncio.get_event_loop().time(),
+                    'eventType': 'recordingEnded',
+                    'status': 'stopped',
+                    'queuedChunks': queued_chunks
+                }
+                await sio.emit('recordingEnded', event_data)
+                logger.info(
+                    f"Emitted recordingEnded event for {meeting_id}; "
+                    f"queued chunks: {queued_chunks}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to emit recordingEnded event: {e}")
+        else:
+            logger.debug(
+                f"WebSocket not connected; recordingEnded event not sent for {meeting_id}"
+            )
+        
         # Save audio
         if self.current_meeting_id:
             await self.save_audio(self.current_meeting_id)
             self.current_meeting_id = None
         
         # Disconnect WebSocket
-        if self.sio and self.sio.connected:
-            await self.sio.disconnect()
-            logger.info("WebSocket disconnected")
-            self.sio = None
+        if self.websocket_manager.is_connected():
+            try:
+                sio = self.websocket_manager.get_instance()
+                await sio.disconnect()
+                logger.info("WebSocket disconnected")
+            except Exception as e:
+                logger.warning(f"Failed to disconnect WebSocket: {e}")
             
 
     async def join_as_guest(self, guest_name: str):

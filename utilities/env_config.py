@@ -70,6 +70,13 @@ class Config(BaseSettings):
     # ============================================================
 
     BACKEND_URL: str
+    WEBSOCKET_URL: str
+    WEBSOCKET_RECONNECT_DELAY: int = Field(default=1000, ge=100, le=10000)
+    WEBSOCKET_BACKOFF_FACTOR: float = Field(default=2.0, ge=1.0, le=5.0)
+    WEBSOCKET_MAX_RECONNECT_DELAY: int = Field(default=30000, ge=5000, le=120000)
+    WEBSOCKET_MAX_RECONNECT_ATTEMPTS: int = Field(default=5, ge=1, le=20)
+    AUDIO_QUEUE_MAX_CHUNKS: int = Field(default=100, ge=10, le=1000)
+    AUDIO_QUEUE_MAX_MEMORY_MB: int = Field(default=10, ge=1, le=100)
 
     # ============================================================
     # Validators

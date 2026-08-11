@@ -21,7 +21,7 @@ class CWCaller:
         self,
         file_path: str,
         project_id: str,
-        display_name: str = "string",
+        display_name: Optional[str] = None,
         is_ai: bool = True,
     ) -> Dict[str, Any]:
         """Upload a file to the backend API.
@@ -68,6 +68,8 @@ class CWCaller:
             "displayName": display_name,
             "isAI": is_ai,
         }
+        if display_name:
+            data['displayName'] = display_name
 
         try:
             with path.open("rb") as file:
@@ -118,6 +120,25 @@ class CWCaller:
                 f"request_id={context.get('request_id', 'N/A')}]"
             )
             raise
+
+    async def fetch_resumable_url_from_backend(self, payload: dict) -> str:
+        """Hits your existing FastAPI router to get the Resumable Signed URL"""
+        url = f"{self.base_url}/backend/gcs/generate-upload-signed-urls"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    files = data.get("files", [])
+                    if files and files[0].get("status") == "ready":
+                        return files[0].get("signed_url")
+                    else:
+                        logger.error(f"Backend returned bad status: {files}")
+                else:
+                    logger.error(f"Backend API failed with status {response.status_code}: {response.text}")
+        except Exception as e:
+            logger.error(f"Failed to connect to backend router: {e}")
+        return ""
     
     
 
