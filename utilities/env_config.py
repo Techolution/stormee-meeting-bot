@@ -77,6 +77,7 @@ class Config(BaseSettings):
     WEBSOCKET_MAX_RECONNECT_ATTEMPTS: int = Field(default=5, ge=1, le=20)
     AUDIO_QUEUE_MAX_CHUNKS: int = Field(default=100, ge=10, le=1000)
     AUDIO_QUEUE_MAX_MEMORY_MB: int = Field(default=10, ge=1, le=100)
+    WAIT_TIME_FOR_BOT_LAST_PARTICIPANT: int = Field(default=120,ge=1,le=3600)
 
     # ============================================================
     # Validators

@@ -1,139 +1,85 @@
-"""
-System test to verify Playwright is working correctly
-Run this BEFORE trying the full meet bot
-"""
-
 import asyncio
+from pathlib import Path
 from playwright.async_api import async_playwright
-import sys
 
-async def test_basic_browser():
-    """Test 1: Basic browser launch"""
+FAKE_VIDEO = Path("extras/media/ai_vid.y4m").resolve()
+FAKE_AUDIO = Path("extras/media/output.wav").resolve()
+
+
+async def test_meet_with_fake_media(meeting_url: str):
     print("=" * 60)
-    print("Test 1: Basic Browser Launch")
+    print("Google Meet Fake Audio/Video Test")
     print("=" * 60)
-    
-    try:
-        async with async_playwright() as p:
-            print("✓ Playwright imported successfully")
-            
-            browser = await p.chromium.launch(headless=False)
-            print("✓ Browser launched successfully")
-            
-            page = await browser.new_page()
-            print("✓ Page created successfully")
-            
-            await page.goto("https://www.google.com")
-            print("✓ Navigation successful")
-            
-            title = await page.title()
-            print(f"✓ Page title: {title}")
-            
-            await asyncio.sleep(3)
-            
-            await browser.close()
-            print("✓ Browser closed successfully")
-            
-            print("\n✅ Test 1 PASSED\n")
-            return True
-            
-    except Exception as e:
-        print(f"\n❌ Test 1 FAILED: {e}\n")
-        return False
 
+    if not FAKE_VIDEO.exists():
+        raise FileNotFoundError(f"Missing video: {FAKE_VIDEO}")
 
-async def test_google_meet_page():
-    """Test 2: Can access Google Meet homepage"""
-    print("=" * 60)
-    print("Test 2: Google Meet Homepage Access")
-    print("=" * 60)
-    
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=False,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                ]
-            )
-            
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            )
-            
-            page = await context.new_page()
-            print("✓ Browser and page created")
-            
-            await page.goto("https://meet.google.com", wait_until="networkidle")
-            print("✓ Navigated to Google Meet")
-            
-            title = await page.title()
-            print(f"✓ Page title: {title}")
-            
-            await asyncio.sleep(5)
-            
-            await browser.close()
-            print("✓ Browser closed")
-            
-            print("\n✅ Test 2 PASSED\n")
-            return True
-            
-    except Exception as e:
-        print(f"\n❌ Test 2 FAILED: {e}\n")
-        import traceback
-        traceback.print_exc()
-        return False
+    if not FAKE_AUDIO.exists():
+        raise FileNotFoundError(f"Missing audio: {FAKE_AUDIO}")
 
+    async with async_playwright() as p:
 
-async def run_all_tests(meeting_url: str = None):
-    """Run all tests"""
-    print("\n" + "=" * 60)
-    print("🧪 PLAYWRIGHT SYSTEM TESTS")
-    print("=" * 60 + "\n")
-    
-    results = []
-    
-    # Test 1: Basic browser
-    results.append(await test_basic_browser())
-    
-    # Test 2: Google Meet homepage
-    results.append(await test_google_meet_page())
-    
-    # Summary
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    passed = sum(results)
-    total = len(results)
-    print(f"✅ Passed: {passed}/{total}")
-    
-    if passed == total:
-        print("\n🎉 All tests passed! Your system is ready.")
-        print("You can now try the full meet bot with:")
-        print("  python debug_bot.py <MEETING_URL>")
-    else:
-        print(f"\n⚠️ {total - passed} test(s) failed.")
-        print("Please fix the issues above before using the meet bot.")
-    
-    print("=" * 60 + "\n")
+        browser = await p.chromium.launch(
+            headless=False,
+            channel="chromium",
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--start-maximized",
+                "--use-fake-device-for-media-stream",
+                "--use-fake-ui-for-media-stream",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
 
+                # Feed these files into Chromium's camera/microphone.
+                f"--use-file-for-fake-video-capture={FAKE_VIDEO}",
+                f"--use-file-for-fake-audio-capture={FAKE_AUDIO}",
+            ],
+        )
 
-def main():
-    if len(sys.argv) > 1:
-        meeting_url = sys.argv[1]
-        print(f"Meeting URL provided: {meeting_url}")
-        asyncio.run(run_all_tests(meeting_url))
-    else:
-        print("Running basic tests...")
-        print("Usage: python system_test.py <MEETING_URL> (for full test)")
-        asyncio.run(run_all_tests())
+        context = await browser.new_context(
+            viewport=None
+        )
+
+        # Explicitly grant Meet permissions.
+        await context.grant_permissions(
+            ["camera", "microphone"],
+            origin="https://meet.google.com",
+        )
+
+        page = await context.new_page()
+
+        print("✓ Browser started")
+        print("✓ Fake microphone:", FAKE_AUDIO)
+        print("✓ Fake camera:", FAKE_VIDEO)
+
+        await page.goto(
+            meeting_url,
+            wait_until="domcontentloaded",
+        )
+
+        print("✓ Meet page opened")
+        print("\nYou should now see the Meet preview.")
+        print("Your fake WAV is the microphone input.")
+        print("Your fake Y4M is the camera input.")
+        print("\nPress Ctrl+C when finished.")
+
+        # Keep browser alive so you can inspect Meet.
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            pass
+
+        await browser.close()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\n⚠️ Tests cancelled by user")
-        sys.exit(0)
+    import sys
+    
+    if len(sys.argv) != 2:
+        print("Usage:")
+        print("  python meet_media_test.py <MEETING_URL>")
+        sys.argv.append("https://meet.google.com/cij-yvaw-wpu")
+
+    asyncio.run(test_meet_with_fake_media(sys.argv[1]))

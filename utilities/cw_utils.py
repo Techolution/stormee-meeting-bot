@@ -131,7 +131,7 @@ class CWCaller:
                     data = response.json()
                     files = data.get("files", [])
                     if files and files[0].get("status") == "ready":
-                        return files[0].get("signed_url")
+                        return files[0].get("signed_url"), files[0].get("public_url")
                     else:
                         logger.error(f"Backend returned bad status: {files}")
                 else:
@@ -140,7 +140,104 @@ class CWCaller:
             logger.error(f"Failed to connect to backend router: {e}")
         return ""
     
-    
+    async def confirm_upload(
+        self,
+        project_id: str,
+        files: list,
+        is_ai: bool = False,
+        artifact_user_name: str = "",
+        artifact_user_email: str = "",
+        auto_ingest: bool = False,
+    ) -> Dict[str, Any]:
+        """Confirm completed audio upload to trigger processing.
+        
+        Notifies backend that all chunks for a meeting have been uploaded,
+        triggering final processing, file finalization, and optional auto-ingest.
+        
+        Args:
+            project_id: Project ID associated with the upload
+            files: List of file dictionaries with 'filename' and 'url' keys
+                   Example: [{"filename": "audio_1.wav", "url": "creative-workspace/projects/..."}]
+            is_ai: Whether this is AI-processed content (default False for audio)
+            artifact_user_name: Name of user who created the artifact
+            artifact_user_email: Email of user who created the artifact
+            auto_ingest: Whether to trigger automatic ingestion (default True)
+            
+        Returns:
+            API response as dictionary
+            
+        Raises:
+            ValueError: If required parameters are missing
+            httpx.HTTPStatusError: If API returns error status
+        """
+        context = RequestContext.get_context()
+        
+        if not project_id or not files:
+            logger.error(
+                f"Missing required parameters for confirm upload [project_id={project_id}, "
+                f"files_count={len(files) if files else 0}, "
+                f"request_id={context.get('request_id', 'N/A')}]"
+            )
+            raise ValueError("project_id and files are required for confirm upload")
+        
+        logger.info(
+            f"Initiating confirm upload [project_id={project_id}, "
+            f"files_count={len(files)}, auto_ingest={auto_ingest}, "
+            f"request_id={context.get('request_id', 'N/A')}]"
+        )
+        
+        # Build request payload
+        payload = {
+            "project_id": project_id,
+            "files": files,
+            "isAI": is_ai,
+            "auto_ingest": auto_ingest,
+        }
+        
+        if artifact_user_name:
+            payload["artifactUserName"] = artifact_user_name
+        
+        if artifact_user_email:
+            payload["artifactUserEmail"] = artifact_user_email
+        
+        try:
+            endpoint = f"{self.base_url}/backend/gcs/confirm-upload"
+            params = {"auto_ingest": "true" if auto_ingest else "false"}
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                    params=params,
+                )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info(
+                f"Confirm upload succeeded [project_id={project_id}, "
+                f"files_count={len(files)}, status={response.status_code}, "
+                f"request_id={context.get('request_id', 'N/A')}]"
+            )
+            
+            return result
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"API returned error status for confirm upload [project_id={project_id}, "
+                f"status={e.response.status_code}, "
+                f"error={e.response.text[:200]}, "
+                f"request_id={context.get('request_id', 'N/A')}]"
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                f"Confirm upload failed [project_id={project_id}, "
+                f"error_type={type(e).__name__}, "
+                f"error_msg={str(e)[:200]}, "
+                f"request_id={context.get('request_id', 'N/A')}]"
+            )
+            raise
 
 
 cw_caller = CWCaller()

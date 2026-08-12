@@ -69,74 +69,122 @@ class MeetBot:
         self.websocket_manager.set_on_reconnect_success(self._on_websocket_reconnect)
 
     async def ensure_auth_session(self, meeting_url: str):
-        """Initialize browser with a persistent Google Chrome profile"""
+        """Initialize browser with a persistent Google Chrome profile with retries."""
         logger.info("Initializing browser with persistent profile")
 
-        self.playwright = await async_playwright().start()
+        max_retries = 3
+        retry_delay = 3
+        timeout_ms = 30_000
 
-        # Ensure the profile directory exists
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.playwright = await async_playwright().start()
 
-        # Set headless based on environment (Headless=True inside Docker/Production)
-        try:
-            is_headless = config.get_bool('HEADLESS')
-        except ValueError:
-            is_headless = True  # Default to False if not set
+                PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Launch browser with persistent storage directory
-        self.context = (
-            await self.playwright.chromium.launch_persistent_context(
-                user_data_dir=str(PROFILE_DIR.resolve()),
-                headless=is_headless,
-                channel="chromium",  # Uses local Chromium installation
-                permissions=["microphone", "camera"],
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--start-maximized",
-                    "--use-fake-device-for-media-stream",
-                    "--use-fake-ui-for-media-stream",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
-                viewport=None,  # Matches window size
-            )
-        )
-        await self.context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
+                try:
+                    is_headless = config.get_bool("HEADLESS")
+                except ValueError:
+                    is_headless = True
 
-        # Persistent contexts open with an existing page by default
-        if len(self.context.pages) > 0:
-            self.page = self.context.pages[0]
-        else:
-            self.page = await self.context.new_page()
+                self.context = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(PROFILE_DIR.resolve()),
+                    headless=is_headless,
+                    channel="chromium",
+                    permissions=["microphone", "camera"],
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--start-maximized",
+                        "--use-fake-device-for-media-stream",
+                        "--use-fake-ui-for-media-stream",
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                    ],
+                    viewport=None,
+                    timeout=timeout_ms,
+                )
 
-        # Audio stream capture hook
-        await self.page.add_init_script("""
-            window.remoteAudioStreams = [];
-            const OriginalRTCPeerConnection = window.RTCPeerConnection;
-            window.RTCPeerConnection = function (...args) {
-                const pc = new OriginalRTCPeerConnection(...args);
-                pc.addEventListener('track', (event) => {
-                    if (event.track.kind === 'audio') {
-                        const remoteStream = event.streams[0];
-                        const audio = document.createElement('audio');
-                        audio.srcObject = remoteStream;
-                        audio.autoplay = true;
-                        audio.muted = true;
-                        document.body.appendChild(audio);
-                        window.remoteAudioStreams.push(remoteStream);
-                    }
-                });
-                return pc;
-            };
-        """)
+                await self.context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                """)
 
-        logger.debug(f"Navigating to meeting URL: {meeting_url}")
-        await self.page.goto(meeting_url)
+                if self.context.pages:
+                    self.page = self.context.pages[0]
+                else:
+                    self.page = await self.context.new_page()
+
+                await self.page.add_init_script("""
+                    window.remoteAudioStreams = [];
+
+                    const OriginalRTCPeerConnection = window.RTCPeerConnection;
+
+                    window.RTCPeerConnection = function (...args) {
+                        const pc = new OriginalRTCPeerConnection(...args);
+
+                        pc.addEventListener('track', (event) => {
+                            if (event.track.kind === 'audio') {
+                                const remoteStream = event.streams[0];
+
+                                const audio = document.createElement('audio');
+                                audio.srcObject = remoteStream;
+                                audio.autoplay = true;
+                                audio.muted = true;
+
+                                document.body.appendChild(audio);
+                                window.remoteAudioStreams.push(remoteStream);
+                            }
+                        });
+
+                        return pc;
+                    };
+                """)
+
+                logger.debug(f"Navigating to meeting URL: {meeting_url}")
+
+                await self.page.goto(
+                    meeting_url,
+                    timeout=timeout_ms,
+                    wait_until="domcontentloaded",
+                )
+
+                logger.info(
+                    f"Browser initialized successfully on attempt {attempt}"
+                )
+
+                return
+
+            except Exception as e:
+                logger.warning(
+                    f"Browser initialization failed "
+                    f"(attempt {attempt}/{max_retries}): {e}"
+                )
+
+                # Cleanup failed attempt
+                try:
+                    if self.context:
+                        await self.context.close()
+                except Exception:
+                    pass
+
+                try:
+                    if self.playwright:
+                        await self.playwright.stop()
+                except Exception:
+                    pass
+
+                self.context = None
+                self.page = None
+                self.playwright = None
+
+                if attempt == max_retries:
+                    logger.error("Browser initialization failed after all retries")
+                    raise
+
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
 
 
     async def pause_camera_in_meet(self):
@@ -230,6 +278,7 @@ class MeetBot:
             await self.pause_camera_in_meet()
 
         else:
+            await asyncio.sleep(2)
             await self.action_controller.pause_audio()
             await self.action_controller.pause_camera()
             await self.action_controller.click_join_meet_button()
@@ -530,10 +579,13 @@ class MeetBot:
                         self.participant_count = new
                     last = new
                     
-                    # if new == 1:
-                    #     print("⚠️ Only bot remains, leaving")
-                    #     await self.leave_meeting()
-                    #     break
+                    if new == 1:
+                        await asyncio.sleep(config.get_int("WAIT_TIME_FOR_BOT_LAST_PARTICIPANT"))
+                        if new != 1: 
+                            break
+                        print("⚠️ Only bot remains, leaving")
+                        await self.leave_meeting()
+                        break
                     
                     await asyncio.sleep(2)
                 except Exception as e:
@@ -695,15 +747,26 @@ class MeetBot:
         
         # WebSocket connection - establish connection with configured URL
         ws_url = config.get('WEBSOCKET_URL')
-        await self.websocket_manager.connect(ws_url)
-        
-        # Log connection state
+        connected = await self.websocket_manager.connect(
+            ws_url,
+            max_attempts=5,
+        )
+
         connection_state = self.websocket_manager.get_connection_state()
-        if connection_state == "active":
-            logger.info(f"WebSocket connected with state: {connection_state}")
+
+        if connected and connection_state == "active":
+            logger.info(
+                f"WebSocket connected successfully; "
+                f"state={connection_state}"
+            )
         else:
-            logger.warning(f"WebSocket not connected; state: {connection_state}")
-            logger.warning("Audio will be saved locally, no real-time streaming")
+            logger.warning(
+                f"WebSocket failed to connect after retries; "
+                f"state={connection_state}"
+            )
+            logger.warning(
+                "Audio will be saved locally, no real-time streaming"
+            )
         
         # Check if function is already exposed
         is_function_exposed = await self.page.evaluate("""
@@ -712,6 +775,7 @@ class MeetBot:
         
         if not is_function_exposed:
             async def handle_chunk_wrapper(chunk):
+                chunk["projectId"] = getattr(self, 'project_id', project_id)
                 await self._handle_audio_chunk(chunk)
             
             await self.page.expose_function(
@@ -726,82 +790,246 @@ class MeetBot:
         await self.page.evaluate("""
             async (meetingId) => {
                 try {
-                    if (window.mediaRecorder && window.mediaRecorder.state !== "inactive") {
-                        window.mediaRecorder.stop();
-                        console.log("🛑 Stopped existing recorder");
+                    // --------------------------------------------------
+                    // Clean up previous MediaRecorder
+                    // --------------------------------------------------
+
+                    if (window.mediaRecorder) {
+                        try {
+                            if (window.mediaRecorder.state !== "inactive") {
+                                window.mediaRecorder.stop();
+                            }
+                        } catch (e) {
+                            console.warn(
+                                "Failed to stop previous recorder:",
+                                e
+                            );
+                        }
+
+                        window.mediaRecorder = null;
                     }
-                    
+
+                    // --------------------------------------------------
+                    // Clean up previous AudioContext
+                    // --------------------------------------------------
+
+                    if (window.recordingAudioContext) {
+                        try {
+                            await window.recordingAudioContext.close();
+                        } catch (e) {
+                            console.warn(
+                                "Failed to close previous AudioContext:",
+                                e
+                            );
+                        }
+
+                        window.recordingAudioContext = null;
+                    }
+
+                    // --------------------------------------------------
+                    // Create fresh AudioContext
+                    // --------------------------------------------------
+
                     const audioCtx = new AudioContext();
-                    const destination = audioCtx.createMediaStreamDestination();
-                    
-                    if (window.remoteAudioStreams && window.remoteAudioStreams.length > 0) {
+
+                    window.recordingAudioContext = audioCtx;
+
+                    const destination =
+                        audioCtx.createMediaStreamDestination();
+
+                    // --------------------------------------------------
+                    // Connect existing remote audio streams
+                    // --------------------------------------------------
+
+                    if (
+                        window.remoteAudioStreams &&
+                        window.remoteAudioStreams.length > 0
+                    ) {
                         window.remoteAudioStreams.forEach((stream) => {
-                            const remoteSource = audioCtx.createMediaStreamSource(stream);
-                            remoteSource.connect(destination);
-                            console.log("🔊 Connected remote stream");
+                            try {
+                                const remoteSource =
+                                    audioCtx.createMediaStreamSource(stream);
+
+                                remoteSource.connect(destination);
+
+                                console.log(
+                                    "🔊 Connected remote stream"
+                                );
+                            } catch (e) {
+                                console.error(
+                                    "Failed to connect remote stream:",
+                                    e
+                                );
+                            }
                         });
                     } else {
-                        console.warn("⚠️ No remote audio streams yet");
+                        console.warn(
+                            "⚠️ No remote audio streams yet"
+                        );
                     }
-                    
-                    window.addEventListener("remoteStreamAdded", (event) => {
-                        const stream = event.detail;
-                        const remoteSource = audioCtx.createMediaStreamSource(stream);
-                        remoteSource.connect(destination);
-                        console.log("🔊 Connected new remote stream");
-                    });
-                    
-                    const mixedStream = destination.stream;
-                    const mediaRecorder = new MediaRecorder(mixedStream, {
-                        mimeType: "audio/webm; codecs=opus"
-                    });
-                    
-                    window.mediaRecorder = mediaRecorder;
-                    window.chunkCounter = 0;
-                    
-                    mediaRecorder.ondataavailable = async (event) => {
-                        if (event.data.size > 0) {
-                            const chunkId = `${meetingId}-${window.chunkCounter++}`;
-                            const timestamp = new Date().toISOString();
-                            const arrayBuffer = await event.data.arrayBuffer();
-                            const audioBlob = Array.from(new Uint8Array(arrayBuffer));
-                            
-                            console.log(`📤 Chunk ready: ${chunkId}, size: ${event.data.size} bytes`);
-                            
-                            if (window.sendAudioChunkToPython) {
-                                try {
-                                    await window.sendAudioChunkToPython({
-                                        meetingId: meetingId,
-                                        chunkId: chunkId,
-                                        timestamp: timestamp,
-                                        audioBlob: audioBlob
-                                    });
-                                } catch (error) {
-                                    console.error("❌ Error sending chunk:", error);
-                                }
-                            } else {
-                                console.error("❌ sendAudioChunkToPython not available");
+
+                    // --------------------------------------------------
+                    // Connect future remote streams
+                    // --------------------------------------------------
+
+                    if (!window.remoteStreamListener) {
+                        window.remoteStreamListener = (event) => {
+                            try {
+                                const stream = event.detail;
+
+                                const remoteSource =
+                                    audioCtx.createMediaStreamSource(stream);
+
+                                remoteSource.connect(destination);
+
+                                console.log(
+                                    "🔊 Connected new remote stream"
+                                );
+                            } catch (e) {
+                                console.error(
+                                    "Failed to connect new remote stream:",
+                                    e
+                                );
                             }
+                        };
+
+                        window.addEventListener(
+                            "remoteStreamAdded",
+                            window.remoteStreamListener
+                        );
+                    }
+
+                    // --------------------------------------------------
+                    // Create MediaRecorder
+                    // --------------------------------------------------
+
+                    const mixedStream = destination.stream;
+
+                    const mediaRecorder = new MediaRecorder(
+                        mixedStream,
+                        {
+                            mimeType: "audio/webm; codecs=opus"
+                        }
+                    );
+
+                    window.mediaRecorder = mediaRecorder;
+
+                    // Reset counter for this recording
+                    window.chunkCounter = 0;
+                    window.pendingAudioChunkPromises = [];
+
+                    // --------------------------------------------------
+                    // Audio chunks
+                    // --------------------------------------------------
+
+                    mediaRecorder.ondataavailable = async (event) => {
+                        if (event.data.size <= 0) {
+                            return;
+                        }
+
+                        const chunkId =
+                            `${meetingId}-${window.chunkCounter++}`;
+
+                        const timestamp =
+                            new Date().toISOString();
+
+                        const sendPromise = (async () => {
+                            try {
+                                const arrayBuffer =
+                                    await event.data.arrayBuffer();
+
+                                const audioBlob =
+                                    Array.from(
+                                        new Uint8Array(arrayBuffer)
+                                    );
+
+                                console.log(
+                                    `📤 Chunk ready: ${chunkId}, ` +
+                                    `size: ${event.data.size} bytes`
+                                );
+
+                                if (window.sendAudioChunkToPython) {
+                                    try {
+                                        await window.sendAudioChunkToPython({
+                                            meetingId: meetingId,
+                                            chunkId: chunkId,
+                                            timestamp: timestamp,
+                                            audioBlob: audioBlob
+                                        });
+                                    } catch (error) {
+                                        console.error(
+                                            "❌ Error sending chunk:",
+                                            error
+                                        );
+                                    }
+                                } else {
+                                    console.error(
+                                        "❌ sendAudioChunkToPython not available"
+                                    );
+                                }
+                            } catch (error) {
+                                console.error(
+                                    "❌ Failed to process audio chunk:",
+                                    error
+                                );
+                            }
+                        })();
+
+                        window.pendingAudioChunkPromises.push(sendPromise);
+                        try {
+                            await sendPromise;
+                        } finally {
+                            window.pendingAudioChunkPromises =
+                                window.pendingAudioChunkPromises.filter(
+                                    (promise) => promise !== sendPromise
+                                );
                         }
                     };
-                    
+
+                    // --------------------------------------------------
+                    // Recorder events
+                    // --------------------------------------------------
+
                     mediaRecorder.onerror = (event) => {
-                        console.error("❌ MediaRecorder error:", event.error);
+                        console.error(
+                            "❌ MediaRecorder error:",
+                            event.error
+                        );
                     };
-                    
+
+                    mediaRecorder.onstart = () => {
+                        console.log(
+                            "▶️ MediaRecorder started"
+                        );
+                    };
+
                     mediaRecorder.onstop = () => {
-                        console.log("🛑 MediaRecorder stopped");
+                        console.log(
+                            "🛑 MediaRecorder stopped"
+                        );
                     };
-                    
-                    // ✅ FIX: Use 5-second chunks instead of 60 seconds for faster feedback
+
+                    // --------------------------------------------------
+                    // Start recording
+                    // --------------------------------------------------
+
                     mediaRecorder.start(5000);
-                    console.log("✅ Recording started for:", meetingId);
+
+                    console.log(
+                        "✅ Recording started for:",
+                        meetingId
+                    );
+
                 } catch (error) {
-                    console.error("❌ Error starting recording:", error);
+                    console.error(
+                        "❌ Error starting recording:",
+                        error
+                    );
+
+                    throw error;
                 }
             }
         """, meeting_id)
-        
         logger.info(f"Recording started for {meeting_id}")
 
     async def _handle_audio_chunk(self, chunk: dict):
@@ -813,10 +1041,10 @@ class MeetBot:
         logger.debug(f"Chunk: {chunk_id}, size: {len(audio_blob)} bytes")
         
         # Store chunk locally
-        if meeting_id not in self.audio_chunks:
-            self.audio_chunks[meeting_id] = []
+        # if meeting_id not in self.audio_chunks:
+        #     self.audio_chunks[meeting_id] = []
         
-        self.audio_chunks[meeting_id].append(chunk)
+        # self.audio_chunks[meeting_id].append(chunk)
         
         # Send via WebSocket if connected; otherwise queue for later transmission
         if self.websocket_manager.is_connected():
@@ -833,7 +1061,7 @@ class MeetBot:
             # WebSocket not connected; enqueue chunk for transmission on reconnect
             self.audio_queue_manager.enqueue(chunk)
             queue_stats = self.audio_queue_manager.get_stats()
-            logger.debug(
+            logger.info(
                 f"WebSocket not connected, chunk queued: {chunk_id}; "
                 f"queue size={queue_stats['queue_size']}, memory={queue_stats['memory_bytes']} bytes"
             )
@@ -974,10 +1202,62 @@ class MeetBot:
         
         # Stop the MediaRecorder
         await self.page.evaluate("""
-            () => {
-                if (window.mediaRecorder && window.mediaRecorder.state !== "inactive") {
-                    window.mediaRecorder.stop();
-                    console.log("🛑 MediaRecorder stopped");
+            async () => {
+                const recorder = window.mediaRecorder;
+
+                if (!recorder) {
+                    console.log("No MediaRecorder exists");
+                    return;
+                }
+
+                if (recorder.state === "inactive") {
+                    console.log("MediaRecorder already inactive");
+                    return;
+                }
+
+                await new Promise((resolve) => {
+                    const originalOnStop = recorder.onstop;
+
+                    recorder.onstop = (event) => {
+                        console.log(
+                            "🛑 MediaRecorder stopped - final chunk emitted"
+                        );
+
+                        if (originalOnStop) {
+                            try {
+                                originalOnStop(event);
+                            } catch (e) {
+                                console.warn(
+                                    "Original onstop handler failed:",
+                                    e
+                                );
+                            }
+                        }
+
+                        resolve();
+                    };
+
+                    try {
+                        recorder.requestData();
+                    } catch (e) {
+                        console.warn(
+                            "requestData before stop failed:",
+                            e
+                        );
+                    }
+
+                    recorder.stop();
+                });
+
+                if (
+                    window.pendingAudioChunkPromises &&
+                    window.pendingAudioChunkPromises.length > 0
+                ) {
+                    console.log(
+                        `⏳ Waiting for ${window.pendingAudioChunkPromises.length} ` +
+                        `pending audio chunk send(s)`
+                    );
+                    await Promise.allSettled(window.pendingAudioChunkPromises);
                 }
             }
         """)
@@ -987,22 +1267,40 @@ class MeetBot:
         await asyncio.sleep(2)  # Give time for final chunk to process
         
         # Emit recordingEnded event via WebSocket to notify external streaming storage systems
-        # This allows streaming storage backends to finalize chunk processing and close file handles
+        # This allows streaming storage backends to finalize chunk processing, upload remaining chunks,
+        # and confirm upload completion with project metadata
         if self.websocket_manager.is_connected():
             try:
                 sio = self.websocket_manager.get_instance()
                 queued_chunks = self.audio_queue_manager.get_queue_size()
+
+                if queued_chunks > 0:
+                    logger.info(
+                        f"Draining {queued_chunks} locally queued chunk(s) before recordingEnded"
+                    )
+                    await self._on_websocket_reconnect()
+                    queued_chunks = self.audio_queue_manager.get_queue_size()
+                
+                # Get project and user metadata from bot instance
+                project_id = getattr(self, 'project_id', None)
+                user_name = getattr(self, 'user_name', '')
+                user_email = getattr(self, 'user_email', '')
+                
                 event_data = {
                     'meetingId': meeting_id,
+                    'projectId': project_id,
                     'timestamp': asyncio.get_event_loop().time(),
                     'eventType': 'recordingEnded',
                     'status': 'stopped',
-                    'queuedChunks': queued_chunks
+                    'queuedChunks': queued_chunks,
+                    'artifactUserName': user_name,
+                    'artifactUserEmail': user_email,
                 }
-                await sio.emit('recordingEnded', event_data)
+                response = await sio.call('recordingEnded', event_data, timeout=30)
                 logger.info(
-                    f"Emitted recordingEnded event for {meeting_id}; "
-                    f"queued chunks: {queued_chunks}"
+                    f"recordingEnded acknowledged for {meeting_id}; "
+                    f"queued chunks: {queued_chunks}, project_id: {project_id}, "
+                    f"user: {user_name}, response: {response}"
                 )
             except Exception as e:
                 logger.warning(f"Failed to emit recordingEnded event: {e}")
@@ -1012,18 +1310,18 @@ class MeetBot:
             )
         
         # Save audio
-        if self.current_meeting_id:
-            await self.save_audio(self.current_meeting_id)
-            self.current_meeting_id = None
+        # if self.current_meeting_id:
+        #     await self.save_audio(self.current_meeting_id)
+        #     self.current_meeting_id = None
         
         # Disconnect WebSocket
-        if self.websocket_manager.is_connected():
-            try:
-                sio = self.websocket_manager.get_instance()
-                await sio.disconnect()
-                logger.info("WebSocket disconnected")
-            except Exception as e:
-                logger.warning(f"Failed to disconnect WebSocket: {e}")
+        try:
+            await self.websocket_manager.disconnect()
+            logger.info("WebSocket disconnected and client disposed")
+        except Exception as e:
+            logger.warning(
+                f"Failed to disconnect WebSocket: {e}"
+            )
             
 
     async def join_as_guest(self, guest_name: str):
