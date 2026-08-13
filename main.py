@@ -31,9 +31,9 @@ app = FastAPI(
     title="Meet API",
     description="API documentation for the Meet service",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json"
+    docs_url="/api/meet/docs",
+    redoc_url="/api/meet/redoc",
+    openapi_url="/api/meet/openapi.json"
 )
 
 # CORS middleware
@@ -49,12 +49,12 @@ app.add_middleware(
 app.include_router(meet_router, prefix="/api/meet")
 
 # Root endpoint
-@app.get("/")
+@app.get("/api/meet")
 async def root():
     return {"message": "API is running..."}
 
 # OpenAPI JSON endpoint
-@app.get("/openapi.json")
+@app.get("/api/meet/openapi.json")
 async def get_openapi():
     return JSONResponse(content=app.openapi())
 
