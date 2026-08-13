@@ -57,6 +57,7 @@ class MeetBot:
         # Tasks
         self.caption_task: Optional[asyncio.Task] = None
         self.participant_task: Optional[asyncio.Task] = None
+
         
         # WebSocket and Audio Buffering
         self.websocket_manager = WebSocketManager()
@@ -69,8 +70,12 @@ class MeetBot:
         self.websocket_manager.set_on_reconnect_success(self._on_websocket_reconnect)
 
     async def ensure_auth_session(self, meeting_url: str):
-        """Initialize browser with a persistent Google Chrome profile with retries."""
-        logger.info("Initializing browser with persistent profile")
+        """Initialize browser with conditional profile persistence based on PROFILE_DIR availability.
+        
+        If PROFILE_DIR exists or can be created, launches persistent context (preserves cookies, cache, etc).
+        If PROFILE_DIR cannot be created, falls back to normal chromium launch (ephemeral session).
+        """
+        logger.info("Initializing browser")
 
         max_retries = 3
         retry_delay = 3
@@ -80,30 +85,61 @@ class MeetBot:
             try:
                 self.playwright = await async_playwright().start()
 
-                PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
                 try:
                     is_headless = config.get_bool("HEADLESS")
                 except ValueError:
                     is_headless = True
 
-                self.context = await self.playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(PROFILE_DIR.resolve()),
-                    headless=is_headless,
-                    channel="chromium",
-                    permissions=["microphone", "camera"],
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--start-maximized",
-                        "--use-fake-device-for-media-stream",
-                        "--use-fake-ui-for-media-stream",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-dev-shm-usage",
-                    ],
-                    viewport=None,
-                    timeout=timeout_ms,
-                )
+                # Check if PROFILE_DIR exists or can be created
+                use_persistent_context = False
+                try:
+                    # PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                    if PROFILE_DIR.exists():
+                        use_persistent_context = True
+                        logger.info(f"Profile directory exists: {PROFILE_DIR}. Using persistent context.")
+                    else:
+                        logger.warning(f"Could not create profile directory: {PROFILE_DIR}. Using ephemeral session.")
+                except Exception as e:
+                    logger.warning(f"Failed to create profile directory: {e}. Using ephemeral session.")
+
+                # Launch chromium with or without persistent context
+                if use_persistent_context:
+                    self.context = await self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=str(PROFILE_DIR.resolve()),
+                        headless=is_headless,
+                        channel="chromium",
+                        permissions=["microphone", "camera"],
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--start-maximized",
+                            "--use-fake-device-for-media-stream",
+                            "--use-fake-ui-for-media-stream",
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                            "--disable-dev-shm-usage",
+                        ],
+                        viewport=None,
+                        timeout=timeout_ms,
+                    )
+                else:
+                    # Launch normal chromium and create a new page
+                    self.browser = await self.playwright.chromium.launch(
+                        headless=is_headless,
+                        channel="chromium",
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--start-maximized",
+                            "--use-fake-device-for-media-stream",
+                            "--use-fake-ui-for-media-stream",
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                            "--disable-dev-shm-usage",
+                        ],
+                    )
+                    self.context = await self.browser.new_context(
+                        permissions=["microphone", "camera"],
+                        viewport=None,
+                    )
 
                 await self.context.add_init_script("""
                     Object.defineProperty(navigator, 'webdriver', {
@@ -154,7 +190,7 @@ class MeetBot:
                     f"Browser initialized successfully on attempt {attempt}"
                 )
 
-                return
+                return use_persistent_context
 
             except Exception as e:
                 logger.warning(
@@ -170,11 +206,18 @@ class MeetBot:
                     pass
 
                 try:
+                    if self.browser:
+                        await self.browser.close()
+                except Exception:
+                    pass
+
+                try:
                     if self.playwright:
                         await self.playwright.stop()
                 except Exception:
                     pass
 
+                self.browser = None
                 self.context = None
                 self.page = None
                 self.playwright = None
@@ -264,14 +307,10 @@ class MeetBot:
     async def join_meeting(self, meeting_url: str):
         logger.info(f"Joining meeting: {meeting_url}")
         
-        await self.ensure_auth_session(meeting_url)
+        use_persistent_context = await self.ensure_auth_session(meeting_url)
         guest_name = "Stormee.Ai"
 
-        try:
-            as_guest = config.get_bool('JOIN_AS_GUEST')
-        except ValueError:
-            as_guest = False  # Default to False if not set
-        if as_guest:
+        if not use_persistent_context:
             logger.debug("Waiting for preview interface to stabilize")
             await asyncio.sleep(4)
             await self.join_as_guest(guest_name)
@@ -713,6 +752,8 @@ class MeetBot:
                     await self.page.close()
                 if self.context:
                     await self.context.close()
+                if self.browser:
+                    await self.browser.close()
                 if hasattr(self, "playwright") and self.playwright:
                     await self.playwright.stop()
             except Exception as cleanup_err:
