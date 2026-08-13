@@ -239,5 +239,114 @@ class CWCaller:
             )
             raise
 
+    async def generate_meeting_mode_artifact(
+        self,
+        audio_name: str,
+        project_id: str,
+        display_name: str,
+        user_email: str,
+        user_name: str,
+        model_type: str = "google",
+        large_language_model: str = "claude-3.5-sonnet",
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate a meeting mode artifact from audio.
+        
+        Sends audio and metadata to the backend meeting mode artifact generation endpoint
+        to process and generate a meeting artifact.
+        
+        Args:
+            audio_name: Name of the audio file (e.g., "mbn-izwe-vuw_ad71b2ac-0d1f-46a7-ac9f-2ec73ebf2efc.webm")
+            project_id: Project ID for the artifact generation
+            display_name: Display name for the artifact
+            user_email: Email of the user creating the artifact
+            user_name: Name of the user creating the artifact
+            model_type: Type of model to use (default "google")
+            large_language_model: LLM model to use (default "claude-3.5-sonnet")
+            request_id: Optional request ID for tracking
+            
+        Returns:
+            API response as dictionary
+            
+        Raises:
+            ValueError: If required parameters are missing
+            httpx.HTTPStatusError: If API returns error status
+        """
+        context = RequestContext.get_context()
+        
+        # Use provided request_id or get from context
+        req_id = request_id or context.get('request_id', 'N/A')
+        
+        if not all([audio_name, project_id, display_name, user_email, user_name]):
+            logger.error(
+                f"Missing required parameters for meeting mode artifact generation "
+                f"[audio_name={audio_name}, project_id={project_id}, "
+                f"display_name={display_name}, user_email={user_email}, "
+                f"user_name={user_name}, request_id={req_id}]"
+            )
+            raise ValueError("audio_name, project_id, display_name, user_email, and user_name are required")
+        
+        logger.info(
+            f"Initiating meeting mode artifact generation [audio_name={audio_name}, "
+            f"project_id={project_id}, display_name={display_name}, "
+            f"model_type={model_type}, llm={large_language_model}, "
+            f"request_id={req_id}]"
+        )
+        
+        # Build request payload
+        payload = {
+            "audio_name": audio_name,
+            "project_id": project_id,
+            "display_name": display_name,
+            "user_email": user_email,
+            "user_name": user_name,
+            "model_type": model_type,
+            "large_language_model": large_language_model,
+            "request_id": req_id,
+        }
+        
+        try:
+            endpoint = f"{self.base_url}/backend/meeting_mode_artifact/gen_mm_artifact_latest"
+            headers = {
+                "accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers=headers,
+                )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info(
+                f"Meeting mode artifact generation succeeded [audio_name={audio_name}, "
+                f"project_id={project_id}, status={response.status_code}, "
+                f"request_id={req_id}]"
+            )
+            
+            return result
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"API returned error status for meeting mode artifact generation "
+                f"[audio_name={audio_name}, project_id={project_id}, "
+                f"status={e.response.status_code}, "
+                f"error={e.response.text[:200]}, "
+                f"request_id={req_id}]"
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                f"Meeting mode artifact generation failed [audio_name={audio_name}, "
+                f"project_id={project_id}, error_type={type(e).__name__}, "
+                f"error_msg={str(e)[:200]}, "
+                f"request_id={req_id}]"
+            )
+            raise
+
 
 cw_caller = CWCaller()

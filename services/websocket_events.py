@@ -14,6 +14,7 @@ from utilities.cw_utils import CWCaller
 from services.chunk_upload_manager import get_chunk_upload_manager
 from utilities.env_config import config
 from typing import Dict
+from utilities.mail_utils import email_sender
 
 logger = logging.getLogger(__name__)
 
@@ -344,11 +345,12 @@ def register_websocket_handlers(sio: socketio.AsyncServer) -> None:
                         payload = {
                             'project_id': data.get("projectId"),
                             'filenames': [f"{meeting_id.replace('/', '_').replace(':', '_')}_{rec_id}.webm"],
-                            'resumable': True
+                            'resumable': True,
+                            'content_type': 'audio/webm;codecs=opus'
                         }
                         resumable_url, public_url = await cw_caller.fetch_resumable_url_from_backend(payload)
                         chunk_manager.set_resumable_url(meeting_id, resumable_url, public_url)
-                        logger.info(f"[{meeting_id}] Resumable URL fetched successfully")
+                        logger.info(f"[{meeting_id}] Resumable URL fetched successfully with contentType=audio/webm;codecs=opus")
                     except Exception as e:
                         logger.error(f"[{meeting_id}] Failed to fetch resumable URL: {e}")
                         return
@@ -516,8 +518,9 @@ def register_websocket_handlers(sio: socketio.AsyncServer) -> None:
                     )
                     
                     # Single file from the one resumable_url session
+                    audio_filename = session.public_url.split("/")[-1]
                     files = [{
-                        "filename": session.public_url.split("/")[-1],
+                        "filename": audio_filename,
                         "url": session.public_url
                     }]
                     
@@ -531,6 +534,30 @@ def register_websocket_handlers(sio: socketio.AsyncServer) -> None:
                         artifact_user_email=user_email,
                         auto_ingest=True,
                     )
+                    if result and "uploaded_files" in result and len(result.get("uploaded_files"))>0:
+                        
+                        # Create background tasks for artifact generation and email notification
+                        asyncio.create_task(
+                            cw_caller.generate_meeting_mode_artifact(
+                                audio_name=audio_filename,
+                                project_id=project_id,
+                                display_name=meeting_id,
+                                user_email=user_email,
+                                user_name=user_name,
+                            )
+                        )
+                        
+                        asyncio.create_task(
+                            email_sender.send_meeting_file_uploaded_email(
+                                user_name=user_name,
+                                user_email=user_email,
+                                project_name=project_id,
+                                project_url=f"https://dev.appmod.ai/mode/Project%20Mode/projects/{project_id}",
+                                meeting_title=meeting_id,
+                                file_type="recording"
+                            )
+                        )
+
                     
                     logger.info(
                         f"[{meeting_id}] Upload confirmed successfully. Response: {result}"
