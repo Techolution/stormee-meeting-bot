@@ -6,28 +6,76 @@
     <style>
       body {
         font-family: Arial, sans-serif;
-        width: 300px;
+        width: 320px;
         padding: 12px;
-        text-align: center;
-      }
-      input,
-      button {
-        margin: 6px 0;
-        width: 100%;
-        padding: 8px;
         box-sizing: border-box;
       }
-      #status {
-        margin-top: 10px;
-        font-weight: bold;
-        word-break: break-all;
+      h3 {
+        margin: 0 0 10px 0;
+        text-align: center;
       }
       label {
         display: block;
-        text-align: left;
         margin-top: 8px;
-        font-size: 0.9em;
+        font-size: 0.85em;
+        font-weight: bold;
+        color: #333;
       }
+      input {
+        width: 100%;
+        padding: 6px 8px;
+        margin-top: 2px;
+        box-sizing: border-box;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      .btn-group {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      button {
+        flex: 1;
+        padding: 8px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+      }
+      #start-btn, #start-rec-btn {
+        background-color: #28a745;
+        color: white;
+      }
+      #stop-btn, #stop-rec-btn {
+        background-color: #dc3545;
+        color: white;
+      }
+      #add-recipient-btn {
+        background-color: #007bff;
+        color: white;
+        width: 100%;
+        margin-top: 6px;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 0.85em;
+        text-align: center;
+        word-break: break-all;
+        min-height: 16px;
+      }
+      .status-success { color: green; }
+      .status-error { color: red; }
+      
+      .divider {
+        border-top: 1px solid #eee;
+        margin: 12px 0;
+      }
+
+      /* Modal Styling */
       .modal {
         display: none;
         position: fixed;
@@ -39,63 +87,76 @@
       }
       .modal-content {
         background-color: white;
-        margin: 15% auto;
-        padding: 20px;
+        margin: 25% auto;
+        padding: 15px;
         width: 80%;
-        border-radius: 5px;
+        border-radius: 6px;
+        text-align: center;
       }
       .modal-buttons {
-        margin-top: 15px;
+        margin-top: 12px;
         display: flex;
-        justify-content: space-between;
+        gap: 10px;
       }
-      .modal-buttons button {
-        width: 45%;
+      select {
+        width: 100%;
+        padding: 6px 8px;
+        margin-top: 2px;
+        box-sizing: border-box;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: white;
       }
-      .divider {
-        border-top: 1px solid #ccc;
-        margin: 15px 0;
-      }
+      .api-url {
+      font-size: 11px;
+      color: #777;
+      text-align: center;
+      word-break: break-all;
+    }
     </style>
   </head>
   <body>
     <h3>GMeet Bot Control</h3>
 
+    <label for="environment">Environment</label>
+    <select id="environment">
+      <option value="local">Local</option>
+      <option value="development">Development</option>
+      <option value="qa">Qa</option>
+      <option value="production">Production</option>
+    </select>
     <label for="meetingUrl">Meeting URL</label>
-    <input
-      id="meetingUrl"
-      type="text"
-      placeholder="https://meet.google.com/abc-defg-hij"
-    />
+    <input id="meetingUrl" type="text" placeholder="https://meet.google.com/cij-yvaw-wpu" value="https://meet.google.com/cij-yvaw-wpu"/>
 
-    <div>
-      <button id="start-btn">Start</button>
-      <button id="stop-btn">Stop</button>
+    <label for="meetingTitle">Meeting Title</label>
+    <input id="meetingTitle" type="text" placeholder="Test Meet" value="Test Meet" />
+
+    <label for="userName">User Name</label>
+    <input id="userName" type="text" placeholder="Swikrit Shukla" />
+
+    <label for="userEmail">User Email</label>
+    <input id="userEmail" type="email" placeholder="swikrit.shukla@techolution.com" />
+
+    <label for="projectId">Project ID</label>
+    <input id="projectId" type="text" placeholder="6a78bbb3dfeb370713b22c8d" />
+
+    <label for="projectName">Project Name</label>
+    <input id="projectName" type="text" placeholder="MeetBot Test" />
+
+    <div class="btn-group">
+      <button id="start-btn">Start Bot</button>
+      <button id="stop-btn">Stop Bot</button>
+    </div>
+
+    <div class="btn-group">
+      <button id="start-rec-btn">Start Recording</button>
+      <button id="stop-rec-btn">Stop Recording</button>
     </div>
 
     <p id="status"></p>
-
+    <p id="api-url" class="api-url"></p>
     <div class="divider"></div>
 
-    <label for="recipientEmail">Add Email Summary Recipient</label>
-    <input
-      id="recipientEmail"
-      type="email"
-      placeholder="Enter email address"
-    />
-    <button id="add-recipient-btn">Add Recipient</button>
-
-    <!-- Confirmation Modal -->
-    <div id="confirmModal" class="modal">
-      <div class="modal-content">
-        <h4>Confirm Recipient</h4>
-        <p>Are you sure you want to add <span id="confirmEmail"></span> as recipient?</p>
-        <div class="modal-buttons">
-          <button id="confirmYes">Yes</button>
-          <button id="confirmNo">No</button>
-        </div>
-      </div>
-    </div>
 
     <script src="popup.js"></script>
   </body>

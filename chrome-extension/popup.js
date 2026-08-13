@@ -1,147 +1,248 @@
-document.addEventListener("DOMContentLoaded", () => {
-  // ---------- DOM references ----------
-  const startBtn = document.getElementById("start-btn");
-  const stopBtn = document.getElementById("stop-btn");
-  const statusEl = document.getElementById("status");
-  const meetUrlIn = document.getElementById("meetingUrl");
-  const recipientEmailIn = document.getElementById("recipientEmail");
-  const addRecipientBtn = document.getElementById("add-recipient-btn");
-  const modal = document.getElementById("confirmModal");
-  const confirmEmailSpan = document.getElementById("confirmEmail");
-  const confirmYesBtn = document.getElementById("confirmYes");
-  const confirmNoBtn = document.getElementById("confirmNo");
+const ENVIRONMENTS = {
+  local: 'http://localhost:5000/api/meet',
+  development: 'https://dev.appmod.ai/api/meet',
+  qa: 'https://qa.appmod.ai/api/meet',
+  production: 'https://appmod.ai/api/meet'
+};
 
-  // ---------- FIXED BASE URL ----------
-  const BASE_URL = "https://dev.appmod.ai"; // Fixed, no input, no storage
+let API_BASE_URL = ENVIRONMENTS.local;
 
-  // ---------- Load only meetingUrl from storage ----------
-  chrome.storage.sync.get(["meetingUrl"], (data) => {
-    meetUrlIn.value = data.meetingUrl || "";
-  });
+// Helper to set UI status messages
+function showStatus(text, isError = false) {
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = text;
+  statusEl.className = isError ? 'status-error' : 'status-success';
+}
 
-  // Save meeting URL when changed
-  meetUrlIn.addEventListener("change", () => {
-    chrome.storage.sync.set({ meetingUrl: meetUrlIn.value.trim() });
-  });
+// Utility: Extract meetingId from URL (e.g., https://meet.google.com/abc-defg-hij -> abc-defg-hij)
+function extractMeetingId(url) {
+  try {
+    const parsedUrl = new URL(url.trim());
+    const pathname = parsedUrl.pathname.replace(/^\//, ''); // remove leading slash
+    return pathname || `meeting-${Date.now()}`;
+  } catch (e) {
+    // If user provided raw string without protocol
+    const cleanUrl = url.trim().replace(/^https?:\/\//, '');
+    const parts = cleanUrl.split('/');
+    return parts[parts.length - 1] || `meeting-${Date.now()}`;
+  }
+}
 
-  // ---------- Helper ----------
-  const getMeetingUrl = () => meetUrlIn.value.trim();
-
-  // ---------- Start button ----------
-  startBtn.addEventListener("click", async () => {
-    const meetingUrl = getMeetingUrl();
-
-    if (!meetingUrl) {
-      statusEl.textContent = "Error: Please enter a meeting URL.";
-      return;
+// Auto-fill active tab URL if it is a Google Meet URL
+document.addEventListener('DOMContentLoaded', () => {
+  // Load saved user config from local storage
+  chrome.storage.local.get(
+  ['userName', 'userEmail', 'projectId', 'projectName', 'environment'],
+  (stored) => {
+    if (stored.userName) {
+      document.getElementById('userName').value = stored.userName;
     }
 
-    statusEl.textContent = "Starting bot…";
-
-    try {
-      const response = await fetch(
-        `${BASE_URL}/meeting_recorder_stormee/signin`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ meetingUrl }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (response.status == 200) {
-        statusEl.textContent = "Bot started successfully!";
-      } else {
-        statusEl.textContent = `Error: ${data.message || "Failed to start"}`;
-      }
-    } catch (err) {
-      statusEl.textContent = "Error: Could not connect to server.";
-      console.error("Start error:", err);
-    }
-  });
-
-  // ---------- Stop button ----------
-  stopBtn.addEventListener("click", async () => {
-    statusEl.textContent = "Stopping bot…";
-
-    try {
-      const response = await fetch(
-        `${BASE_URL}/meeting_recorder_stormee/exit`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-
-      const data = await response.json();
-
-      if (response.status == 201) {
-        statusEl.textContent = "Bot stopped successfully!";
-      } else {
-        statusEl.textContent = `Error: ${data.message || "Failed to stop"}`;
-      }
-    } catch (err) {
-      statusEl.textContent = "Error: Could not connect to server.";
-      console.error("Stop error:", err);
-    }
-  });
-
-  // ---------- Add Recipient functionality ----------
-  addRecipientBtn.addEventListener("click", () => {
-    const email = recipientEmailIn.value.trim();
-    if (!email) {
-      statusEl.textContent = "Error: Please enter an email address.";
-      return;
+    if (stored.userEmail) {
+      document.getElementById('userEmail').value = stored.userEmail;
     }
 
-    if (!email.includes("@")) {
-      statusEl.textContent = "Error: Please enter a valid email address.";
-      return;
+    if (stored.projectId) {
+      document.getElementById('projectId').value = stored.projectId;
     }
 
-    confirmEmailSpan.textContent = email;
-    modal.style.display = "block";
-  });
-
-  // Modal confirmation handlers
-  confirmYesBtn.addEventListener("click", async () => {
-    const email = recipientEmailIn.value.trim();
-    
-    try {
-      const response = await fetch(
-        `${BASE_URL}/meeting_recorder_stormee/recipient/add`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (response.status === 200) {
-        statusEl.textContent = "Recipient added successfully!";
-        recipientEmailIn.value = ""; // Clear the input
-      } else {
-        statusEl.textContent = `Error: ${data.message || "Failed to add recipient"}`;
-      }
-    } catch (err) {
-      statusEl.textContent = "Error: Could not connect to server.";
-      console.error("Add recipient error:", err);
+    if (stored.projectName) {
+      document.getElementById('projectName').value = stored.projectName;
     }
 
-    modal.style.display = "none";
-  });
+    if (stored.environment) {
+      document.getElementById('environment').value = stored.environment;
+      API_BASE_URL = ENVIRONMENTS[stored.environment] || ENVIRONMENTS.local;
+    }
+  }
+);
 
-  confirmNoBtn.addEventListener("click", () => {
-    modal.style.display = "none";
-  });
-
-  // Close modal when clicking outside
-  window.addEventListener("click", (event) => {
-    if (event.target === modal) {
-      modal.style.display = "none";
+  // Query active tab URL
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]?.url && tabs[0].url.includes('meet.google.com')) {
+      document.getElementById('meetingUrl').value = tabs[0].url;
     }
   });
 });
+
+// Helper to persist standard settings across browser sessions
+function saveUserSettings() {
+  const settings = {
+    userName: document.getElementById('userName').value,
+    userEmail: document.getElementById('userEmail').value,
+    projectId: document.getElementById('projectId').value,
+    projectName: document.getElementById('projectName').value,
+    environment: document.getElementById('environment').value
+  };
+  chrome.storage.local.set(settings);
+}
+
+document.getElementById('environment').addEventListener('change', (event) => {
+  const environment = event.target.value;
+
+  API_BASE_URL = ENVIRONMENTS[environment] || ENVIRONMENTS.local;
+
+  chrome.storage.local.set({
+    environment
+  });
+
+  showStatus(`Environment changed to ${environment}`);
+});
+
+// Handler: Start Bot
+document.getElementById('start-btn').addEventListener('click', async () => {
+  const meetingUrl = document.getElementById('meetingUrl').value.trim();
+  const meetingTitle = document.getElementById('meetingTitle').value.trim();
+  const userName = document.getElementById('userName').value.trim();
+  const userEmail = document.getElementById('userEmail').value.trim();
+  const projectId = document.getElementById('projectId').value.trim();
+  const projectName = document.getElementById('projectName').value.trim();
+
+  if (!meetingUrl) {
+    showStatus('Please provide a valid Meeting URL.', true);
+    return;
+  }
+
+  saveUserSettings();
+  const meetingId = extractMeetingId(meetingUrl);
+
+  const payload = {
+    meetingUrl,
+    meetingId,
+    userName: userName || "Swikrit Shukla",
+    userEmail: userEmail || "swikrit.shukla@techolution.com",
+    projectId: projectId || "6a78bbb3dfeb370713b22c8d",
+    projectName: projectName || "MeetBot Test",
+    meetingTitle: meetingTitle || "Test Meet"
+  };
+
+  showStatus('Sending join request...');
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/signin`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      showStatus('Bot requested to join successfully!');
+    } else {
+      const errData = await response.json().catch(() => ({}));
+      showStatus(`Error: ${errData.message || response.statusText}`, true);
+    }
+  } catch (error) {
+    showStatus(`Network Error: ${error.message}`, true);
+  }
+});
+
+// Handler: Stop Bot
+document.getElementById('stop-btn').addEventListener('click', async () => {
+  const meetingUrl = document.getElementById('meetingUrl').value.trim();
+
+  if (!meetingUrl) {
+    showStatus('Meeting URL is required to identify the meeting ID.', true);
+    return;
+  }
+
+  const meetingId = extractMeetingId(meetingUrl);
+  const payload = { meetingId };
+
+  showStatus('Sending exit request...');
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/exit`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      showStatus('Bot exit command sent!');
+    } else {
+      const errData = await response.json().catch(() => ({}));
+      showStatus(`Error: ${errData.message || response.statusText}`, true);
+    }
+  } catch (error) {
+    showStatus(`Network Error: ${error.message}`, true);
+  }
+});
+
+document.getElementById('start-rec-btn').addEventListener('click', async () => {
+  const meetingUrl = document.getElementById('meetingUrl').value.trim();
+
+  if (!meetingUrl) {
+    showStatus('Meeting URL is required to identify the meeting ID.', true);
+    return;
+  }
+
+  const meetingId = extractMeetingId(meetingUrl);
+  const payload = { meetingId };
+
+  showStatus('Starting recording...');
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/record/start`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      showStatus('Bot started recording!');
+    } else {
+      const errData = await response.json().catch(() => ({}));
+      showStatus(`Error: ${errData.message || response.statusText}`, true);
+    }
+  } catch (error) {
+    showStatus(`Network Error: ${error.message}`, true);
+  }
+});
+
+document.getElementById('stop-rec-btn').addEventListener('click', async () => {
+  const meetingUrl = document.getElementById('meetingUrl').value.trim();
+
+  if (!meetingUrl) {
+    showStatus('Meeting URL is required to identify the meeting ID.', true);
+    return;
+  }
+
+  const meetingId = extractMeetingId(meetingUrl);
+  const payload = { meetingId };
+
+  showStatus('Stopping recording...');
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/record/stop`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      showStatus('Bot stopped recording');
+    } else {
+      const errData = await response.json().catch(() => ({}));
+      showStatus(`Error: ${errData.message || response.statusText}`, true);
+    }
+  } catch (error) {
+    showStatus(`Network Error: ${error.message}`, true);
+  }
+});
+
+function updateApiUrlDisplay() {
+  document.getElementById('api-url').textContent =
+    `API: ${API_BASE_URL}`;
+}
