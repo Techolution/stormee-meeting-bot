@@ -69,7 +69,8 @@ sio = socketio.AsyncServer(
 # Wrap FastAPI app with Socket.IO
 socket_app = socketio.ASGIApp(
     sio,
-    other_asgi_app=app
+    other_asgi_app=app,
+    socketio_path="api/meet/socket.io"
 )
 register_websocket_handlers(sio=sio)
 

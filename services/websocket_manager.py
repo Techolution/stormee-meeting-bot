@@ -218,6 +218,7 @@ class WebSocketManager:
                             ws_url,
                             transports=["websocket"],
                             wait_timeout=15,
+                            socketio_path="api/meet/socket.io"
                         )
 
                         # Socket.IO connect() should only return once the
