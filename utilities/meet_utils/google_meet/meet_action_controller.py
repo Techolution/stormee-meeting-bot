@@ -246,6 +246,13 @@ class ActionController:
         except:
             return False
 
+    async def unmute_mic(self):
+        return await self._set_device_state(
+            "microphone",
+            enabled=True,
+            keyboard_shortcut="Control+d",
+        )
+
     async def click_join_meet_button(self) -> bool:
         """Click the 'Join now' or 'Switch here' button."""
         try:

@@ -14,9 +14,11 @@ from controllers.stormee_meet_bot_controller import (
     get_recording_status_controller,
     start_chat_scraping_controller,
     stop_chat_scraping_controller,
+    play_audio_controller,
     MeetingUrlRequest,
     RecordingRequest,
     MeetingActionRequest,
+    PlayAudioRequest,
 )
 
 router = APIRouter()
@@ -191,6 +193,31 @@ async def get_recording_status():
         status: unknown
     """
     return await get_recording_status_controller()
+
+
+@router.post("/audio/play", tags=["Audio Playback"], summary="Play audio in the active Google Meet meeting")
+async def play_audio(request: PlayAudioRequest, _: None = Depends(extract_context)):
+    """
+    Play audio data through the bot's speakers in the active Google Meet meeting.
+    
+    Args:
+        meetingId: The meeting ID where audio should be played
+        audioData: List of integers (0-255) representing encoded audio bytes
+                   (WebM, MP3, WAV, or other encoded audio formats)
+        volume: Playback volume level (0.0 to 1.0, default 0.7)
+    
+    Returns:
+        message: Audio playback initiated
+        meetingId: The meeting ID
+        audioSize: Size of audio data in bytes
+        volume: Playback volume level
+    
+    Raises:
+        400: Invalid input (missing meetingId, audioData, or invalid volume)
+        404: No active bot for the meeting
+        500: Failed to play audio
+    """
+    return await play_audio_controller(request)
 
 
 @router.post("/chat/start", tags=["Chat"], summary="Start scraping and monitoring the meeting chat")

@@ -30,6 +30,11 @@ class RecordingRequest(BaseModel):
 class MeetingActionRequest(BaseModel):
     meetingId: str
 
+class PlayAudioRequest(BaseModel):
+    meetingId: str
+    audioData: list  # List of integers (0-255) representing audio bytes
+    volume: float = 0.7  # Volume level (0.0 to 1.0)
+
 
 async def login_controller(request: MeetingUrlRequest):
     """Create a MeetBot for the meeting and join the specified meeting URL."""
@@ -239,3 +244,65 @@ async def exit_meeting_controller(request: MeetingActionRequest):
     except Exception as err:
         logger.error(f"Error exiting the meeting: {err}")
         raise HTTPException(status_code=500, detail="Failed to exit the meeting")
+
+
+async def play_audio_controller(request: PlayAudioRequest):
+    """Play audio data in the active meeting."""
+    try:
+        meeting_id = request.meetingId
+        audio_data = request.audioData
+        volume = request.volume
+        
+        logger.debug(
+            f"Play audio request received [meeting_id={meeting_id}, "
+            f"audio_size={len(audio_data)} bytes, volume={volume}]"
+        )
+        
+        if not meeting_id:
+            logger.warning("Play audio validation failed: meetingId is required")
+            raise HTTPException(status_code=400, detail="meetingId is required")
+        
+        if not audio_data:
+            logger.warning(f"Play audio validation failed for {meeting_id}: audioData is required")
+            raise HTTPException(status_code=400, detail="audioData is required")
+        
+        # Validate volume range
+        if not (0.0 <= volume <= 1.0):
+            logger.warning(f"Play audio validation failed for {meeting_id}: volume must be between 0.0 and 1.0")
+            raise HTTPException(status_code=400, detail="volume must be between 0.0 and 1.0")
+        
+        # Get bot instance
+        bot = get_bot(meeting_id)
+        if not bot:
+            logger.error(f"No bot found for meeting {meeting_id}")
+            raise HTTPException(status_code=404, detail="No bot found for meetingId")
+        
+        # Play audio
+        result = await bot.play_audio_data(audio_data, volume=volume)
+        
+        if result:
+            logger.info(
+                f"Audio playback initiated for {meeting_id} "
+                f"[size={len(audio_data)} bytes, volume={volume}]"
+            )
+            return JSONResponse(content={
+                "message": "Audio playback initiated",
+                "meetingId": meeting_id,
+                "audioSize": len(audio_data),
+                "volume": volume
+            })
+        else:
+            logger.error(f"Failed to play audio for {meeting_id}")
+            raise HTTPException(status_code=500, detail="Failed to play audio")
+    
+    except HTTPException:
+        raise
+    except Exception as err:
+        context = {
+            'meeting_id': request.meetingId,
+            'audio_size': len(request.audioData) if request.audioData else 0,
+            'volume': request.volume,
+        }
+        logger.error(f"Error playing audio for {request.meetingId}")
+        log_exception(logger, logging.ERROR, "Audio playback failed", err, context)
+        raise HTTPException(status_code=500, detail="Failed to play audio")

@@ -11,6 +11,8 @@ import socketio
 from dotenv import load_dotenv
 import re
 
+from utilities.meet_utils.google_meet.js_helpers import INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT, RECORDING_STARTER, RECORDING_STOPPER, UNSET_WEB_DRIVER
+
 # Get module-level logger
 logger = logging.getLogger(__name__)
 
@@ -141,42 +143,14 @@ class MeetBot:
                         viewport=None,
                     )
 
-                await self.context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    });
-                """)
+                await self.context.add_init_script(UNSET_WEB_DRIVER)
 
                 if self.context.pages:
                     self.page = self.context.pages[0]
                 else:
                     self.page = await self.context.new_page()
 
-                await self.page.add_init_script("""
-                    window.remoteAudioStreams = [];
-
-                    const OriginalRTCPeerConnection = window.RTCPeerConnection;
-
-                    window.RTCPeerConnection = function (...args) {
-                        const pc = new OriginalRTCPeerConnection(...args);
-
-                        pc.addEventListener('track', (event) => {
-                            if (event.track.kind === 'audio') {
-                                const remoteStream = event.streams[0];
-
-                                const audio = document.createElement('audio');
-                                audio.srcObject = remoteStream;
-                                audio.autoplay = true;
-                                audio.muted = true;
-
-                                document.body.appendChild(audio);
-                                window.remoteAudioStreams.push(remoteStream);
-                            }
-                        });
-
-                        return pc;
-                    };
-                """)
+                await self.page.add_init_script(INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT)
 
                 logger.debug(f"Navigating to meeting URL: {meeting_url}")
 
@@ -185,7 +159,9 @@ class MeetBot:
                     timeout=timeout_ms,
                     wait_until="domcontentloaded",
                 )
-
+                if "accounts.google.com" in self.page.url:
+                    logger.error("Meeting requires Google Sign-In. Aborting anonymous join.")
+                    raise PermissionError("Meeting requires Google Sign-In.")
                 logger.info(
                     f"Browser initialized successfully on attempt {attempt}"
                 )
@@ -827,250 +803,12 @@ class MeetBot:
         else:
             logger.debug("sendAudioChunkToPython already exposed, skipping")
         
+  
         # Start recording with SMALLER chunk interval
-        await self.page.evaluate("""
-            async (meetingId) => {
-                try {
-                    // --------------------------------------------------
-                    // Clean up previous MediaRecorder
-                    // --------------------------------------------------
-
-                    if (window.mediaRecorder) {
-                        try {
-                            if (window.mediaRecorder.state !== "inactive") {
-                                window.mediaRecorder.stop();
-                            }
-                        } catch (e) {
-                            console.warn(
-                                "Failed to stop previous recorder:",
-                                e
-                            );
-                        }
-
-                        window.mediaRecorder = null;
-                    }
-
-                    // --------------------------------------------------
-                    // Clean up previous AudioContext
-                    // --------------------------------------------------
-
-                    if (window.recordingAudioContext) {
-                        try {
-                            await window.recordingAudioContext.close();
-                        } catch (e) {
-                            console.warn(
-                                "Failed to close previous AudioContext:",
-                                e
-                            );
-                        }
-
-                        window.recordingAudioContext = null;
-                    }
-
-                    // --------------------------------------------------
-                    // Create fresh AudioContext
-                    // --------------------------------------------------
-
-                    const audioCtx = new AudioContext();
-
-                    window.recordingAudioContext = audioCtx;
-
-                    const destination =
-                        audioCtx.createMediaStreamDestination();
-
-                    // --------------------------------------------------
-                    // Connect existing remote audio streams
-                    // --------------------------------------------------
-
-                    if (
-                        window.remoteAudioStreams &&
-                        window.remoteAudioStreams.length > 0
-                    ) {
-                        window.remoteAudioStreams.forEach((stream) => {
-                            try {
-                                const remoteSource =
-                                    audioCtx.createMediaStreamSource(stream);
-
-                                remoteSource.connect(destination);
-
-                                console.log(
-                                    "🔊 Connected remote stream"
-                                );
-                            } catch (e) {
-                                console.error(
-                                    "Failed to connect remote stream:",
-                                    e
-                                );
-                            }
-                        });
-                    } else {
-                        console.warn(
-                            "⚠️ No remote audio streams yet"
-                        );
-                    }
-
-                    // --------------------------------------------------
-                    // Connect future remote streams
-                    // --------------------------------------------------
-
-                    if (!window.remoteStreamListener) {
-                        window.remoteStreamListener = (event) => {
-                            try {
-                                const stream = event.detail;
-
-                                const remoteSource =
-                                    audioCtx.createMediaStreamSource(stream);
-
-                                remoteSource.connect(destination);
-
-                                console.log(
-                                    "🔊 Connected new remote stream"
-                                );
-                            } catch (e) {
-                                console.error(
-                                    "Failed to connect new remote stream:",
-                                    e
-                                );
-                            }
-                        };
-
-                        window.addEventListener(
-                            "remoteStreamAdded",
-                            window.remoteStreamListener
-                        );
-                    }
-
-                    // --------------------------------------------------
-                    // Create MediaRecorder
-                    // --------------------------------------------------
-
-                    const mixedStream = destination.stream;
-
-                    const mediaRecorder = new MediaRecorder(
-                        mixedStream,
-                        {
-                            mimeType: "audio/webm; codecs=opus"
-                        }
-                    );
-
-                    window.mediaRecorder = mediaRecorder;
-
-                    // Reset counter for this recording
-                    window.chunkCounter = 0;
-                    window.pendingAudioChunkPromises = [];
-
-                    // --------------------------------------------------
-                    // Audio chunks
-                    // --------------------------------------------------
-
-                    mediaRecorder.ondataavailable = async (event) => {
-                        if (event.data.size <= 0) {
-                            return;
-                        }
-
-                        const chunkId =
-                            `${meetingId}-${window.chunkCounter++}`;
-
-                        const timestamp =
-                            new Date().toISOString();
-
-                        const sendPromise = (async () => {
-                            try {
-                                const arrayBuffer =
-                                    await event.data.arrayBuffer();
-
-                                const audioBlob =
-                                    Array.from(
-                                        new Uint8Array(arrayBuffer)
-                                    );
-
-                                console.log(
-                                    `📤 Chunk ready: ${chunkId}, ` +
-                                    `size: ${event.data.size} bytes`
-                                );
-
-                                if (window.sendAudioChunkToPython) {
-                                    try {
-                                        await window.sendAudioChunkToPython({
-                                            meetingId: meetingId,
-                                            chunkId: chunkId,
-                                            timestamp: timestamp,
-                                            audioBlob: audioBlob
-                                        });
-                                    } catch (error) {
-                                        console.error(
-                                            "❌ Error sending chunk:",
-                                            error
-                                        );
-                                    }
-                                } else {
-                                    console.error(
-                                        "❌ sendAudioChunkToPython not available"
-                                    );
-                                }
-                            } catch (error) {
-                                console.error(
-                                    "❌ Failed to process audio chunk:",
-                                    error
-                                );
-                            }
-                        })();
-
-                        window.pendingAudioChunkPromises.push(sendPromise);
-                        try {
-                            await sendPromise;
-                        } finally {
-                            window.pendingAudioChunkPromises =
-                                window.pendingAudioChunkPromises.filter(
-                                    (promise) => promise !== sendPromise
-                                );
-                        }
-                    };
-
-                    // --------------------------------------------------
-                    // Recorder events
-                    // --------------------------------------------------
-
-                    mediaRecorder.onerror = (event) => {
-                        console.error(
-                            "❌ MediaRecorder error:",
-                            event.error
-                        );
-                    };
-
-                    mediaRecorder.onstart = () => {
-                        console.log(
-                            "▶️ MediaRecorder started"
-                        );
-                    };
-
-                    mediaRecorder.onstop = () => {
-                        console.log(
-                            "🛑 MediaRecorder stopped"
-                        );
-                    };
-
-                    // --------------------------------------------------
-                    // Start recording
-                    // --------------------------------------------------
-
-                    mediaRecorder.start(5000);
-
-                    console.log(
-                        "✅ Recording started for:",
-                        meetingId
-                    );
-
-                } catch (error) {
-                    console.error(
-                        "❌ Error starting recording:",
-                        error
-                    );
-
-                    throw error;
-                }
-            }
-        """, meeting_id)
+        await self.page.evaluate(
+            RECORDING_STARTER,
+            meeting_id,
+        )
         logger.info(f"Recording started for {meeting_id}")
 
     async def _handle_audio_chunk(self, chunk: dict):
@@ -1134,6 +872,98 @@ class MeetBot:
                 self.audio_queue_manager.enqueue(chunk)
         
         logger.info(f"Audio queue drain complete; {self.audio_queue_manager.get_queue_size()} chunks remaining")
+    
+    async def play_audio_url(self, audio_url: str, volume: float = 0.7):
+        """Play audio data through the browser's AudioContext.
+        
+        Args:
+            audio_data: Audio url string
+            volume: Playback volume (0.0 to 1.0, default 0.7)
+        
+        Returns:
+            True if audio was sent to playback, False otherwise
+        """
+        if not self.page or self.page.is_closed():
+            logger.error("Page not available for audio playback")
+            return False
+
+        if not await self.action_controller.is_mic_on():
+            await self.action_controller.unmute_mic()
+        try:
+            # Set virtual microphone volume.
+            await self.page.evaluate(
+                """
+                (volume) => {
+                    if (window.__meetingAudio) {
+                        window.__meetingAudio.setMicVolume(
+                            volume
+                        );
+                    }
+                }
+                """,
+                volume,
+            )
+
+            # Inject audio into virtual microphone.
+            await self.page.evaluate(
+                """
+                async (audioUrl) => {
+                    if (!window.__meetingAudio) {
+                        throw new Error(
+                            "__meetingAudio is not available"
+                        );
+                    }
+
+                    await window.__meetingAudio.playIntoMic(
+                        audioUrl
+                    );
+                }
+                """,
+                audio_url,
+            )
+
+            logger.debug(
+                "Audio injected into virtual microphone: "
+                f"volume={volume}"
+            )
+
+            return True
+
+        except Exception as e:
+            logger.error(
+                f"Failed to inject audio into microphone: {e}"
+            )
+            return False
+    
+    async def set_playback_volume(self, volume: float):
+        """Set the playback volume.
+        
+        Args:
+            volume: Volume level (0.0 to 1.0)
+        
+        Returns:
+            True if volume was set, False otherwise
+        """
+        if not self.page or self.page.is_closed():
+            logger.error("Page not available for volume control")
+            return False
+        
+        try:
+            await self.page.evaluate("""
+                (volume) => {
+                    if (window.setPlaybackVolume) {
+                        window.setPlaybackVolume(volume);
+                    } else {
+                        console.warn('setPlaybackVolume function not available');
+                    }
+                }
+            """, volume)
+            
+            logger.debug(f"Playback volume set to: {volume}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set playback volume: {e}")
+            return False
     
     async def save_audio(self, meeting_id: str):
         """Save audio to file"""
@@ -1242,66 +1072,7 @@ class MeetBot:
         logger.info(f"Stopping recording for meeting: {meeting_id}")
         
         # Stop the MediaRecorder
-        await self.page.evaluate("""
-            async () => {
-                const recorder = window.mediaRecorder;
-
-                if (!recorder) {
-                    console.log("No MediaRecorder exists");
-                    return;
-                }
-
-                if (recorder.state === "inactive") {
-                    console.log("MediaRecorder already inactive");
-                    return;
-                }
-
-                await new Promise((resolve) => {
-                    const originalOnStop = recorder.onstop;
-
-                    recorder.onstop = (event) => {
-                        console.log(
-                            "🛑 MediaRecorder stopped - final chunk emitted"
-                        );
-
-                        if (originalOnStop) {
-                            try {
-                                originalOnStop(event);
-                            } catch (e) {
-                                console.warn(
-                                    "Original onstop handler failed:",
-                                    e
-                                );
-                            }
-                        }
-
-                        resolve();
-                    };
-
-                    try {
-                        recorder.requestData();
-                    } catch (e) {
-                        console.warn(
-                            "requestData before stop failed:",
-                            e
-                        );
-                    }
-
-                    recorder.stop();
-                });
-
-                if (
-                    window.pendingAudioChunkPromises &&
-                    window.pendingAudioChunkPromises.length > 0
-                ) {
-                    console.log(
-                        `⏳ Waiting for ${window.pendingAudioChunkPromises.length} ` +
-                        `pending audio chunk send(s)`
-                    );
-                    await Promise.allSettled(window.pendingAudioChunkPromises);
-                }
-            }
-        """)
+        await self.page.evaluate(RECORDING_STOPPER)
         
         # ✅ FIX: Wait for final chunk to arrive
         logger.debug("Waiting for final audio chunks")
@@ -1508,98 +1279,6 @@ class MeetBot:
         except Exception as e:
             logger.warning(f"JS cleanup error: {e}")
 
-    async def _launch_browser_with_fallback(self):
-        """Launch browser with automatic fallback to Chrome on failure"""
-        is_macos = platform.system() == "Darwin"
-        meeting_id = getattr(self, 'current_meeting_id', 'unknown')
-        
-        # Try Chromium first
-        try:
-            logger.info("Attempting to launch Chromium with automation flags")
-            self.browser = await self.playwright.chromium.launch(
-                headless=False,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--start-maximized",
-                    "--use-fake-device-for-media-stream",
-                    "--use-fake-ui-for-media-stream",
-                ],
-                timeout=10000  # 10 second timeout
-            )
-            self.browser_type = "chromium"
-            logger.info(f"Chromium launched successfully for meeting {meeting_id}")
-            return
-        except Exception as e:
-            context = {
-                'browser_type': 'chromium',
-                'platform': platform.system(),
-                'meeting_id': meeting_id,
-            }
-            logger.warning(
-                f"Chromium launch failed, attempting fallback [browser=chromium, platform={platform.system()}]"
-            )
-            log_exception(logger, logging.DEBUG, "Chromium launch error details", e, context)
-            
-            # On macOS, try system Chrome
-            if is_macos:
-                try:
-                    logger.info("Attempting system Chrome as fallback")
-                    self.browser = await self.playwright.chromium.launch(
-                        channel="chrome",
-                        headless=False,
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--start-maximized",
-                            "--use-fake-device-for-media-stream",
-                            "--use-fake-ui-for-media-stream",
-                            "--disable-gpu",
-                        ],
-                        timeout=10000
-                    )
-                    self.browser_type = "chrome"
-                    logger.info(f"System Chrome launched successfully for meeting {meeting_id}")
-                    return
-                except Exception as chrome_error:
-                    chrome_context = {
-                        'browser_type': 'chrome',
-                        'platform': 'macOS',
-                        'meeting_id': meeting_id,
-                    }
-                    logger.error(
-                        f"Chrome launch also failed for meeting {meeting_id} "
-                        "[browser=chrome, platform=macOS]"
-                    )
-                    log_exception(logger, logging.DEBUG, "Chrome launch error details", chrome_error, chrome_context)
-                    logger.error(
-                        "Both Chromium and Chrome failed. Install Chrome from: "
-                        "https://www.google.com/chrome/"
-                    )
-            
-            # Last resort: raise the original error with comprehensive context
-            context = {
-                'chromium_error': str(e),
-                'chrome_error': str(chrome_error) if is_macos else 'N/A',
-                'platform': platform.system(),
-                'meeting_id': meeting_id,
-            }
-            logger.error(
-                f"Failed to launch any browser variant for meeting {meeting_id} "
-                "[context: chromium_failed, chrome_failed_or_skipped]"
-            )
-            log_exception(
-                logger,
-                logging.ERROR,
-                f"Browser launch failed for all variants",
-                e,
-                context
-            )
-            raise Exception(
-                f"Failed to launch browser for meeting {meeting_id}. "
-                f"Tried: Chromium (failed), Chrome (failed/skipped). "
-                f"Please ensure a supported browser is installed."
-            )
-
-    
 # Global instance
 # Manager for multiple MeetBot instances keyed by meeting ID
 meet_bots: Dict[str, MeetBot] = {}
