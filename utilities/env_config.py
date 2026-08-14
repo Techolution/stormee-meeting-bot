@@ -80,6 +80,17 @@ class Config(BaseSettings):
     WAIT_TIME_FOR_BOT_LAST_PARTICIPANT: int = Field(default=120,ge=1,le=3600)
 
     # ============================================================
+    # Redis State Manager
+    # ============================================================
+
+    REDIS_ENABLED: bool = Field(default=True)
+    REDIS_HOST: str = Field(default="localhost")
+    REDIS_PORT: int = Field(default=6379, ge=1, le=65535)
+    REDIS_DB: int = Field(default=0, ge=0, le=15)
+    REDIS_PASSWORD: Optional[str] = Field(default=None)
+    MEETING_STATE_TTL: int = Field(default=3600, ge=300, le=86400)
+
+    # ============================================================
     # Validators
     # ============================================================
 
@@ -112,9 +123,22 @@ class Config(BaseSettings):
     # Backwards-compatible helpers
     # ============================================================
 
-    def get(self, key: str) -> str:
-        """Get a configuration value as a string."""
+    def get(self, key: str, default: Optional[str] = None) -> str:
+        """Get a configuration value as a string.
+        
+        Args:
+            key: Configuration key to retrieve
+            default: Default value if key is not set
+        
+        Returns:
+            Configuration value as string
+        
+        Raises:
+            ValueError: If key not defined and no default provided
+        """
         if not hasattr(self, key):
+            if default is not None:
+                return default
             raise ValueError(
                 f"Configuration key '{key}' is not defined"
             )
@@ -122,6 +146,8 @@ class Config(BaseSettings):
         value = getattr(self, key)
 
         if value is None:
+            if default is not None:
+                return default
             raise ValueError(
                 f"Required configuration value '{key}' is not set"
             )

@@ -23,6 +23,8 @@ from utilities.meet_utils.google_meet.meet_action_controller import ActionContro
 from utilities.env_config import config
 from services.websocket_manager import WebSocketManager
 from services.audio_queue_manager import AudioQueueManager
+
+from services.meeting_state_manager import get_state_manager, MeetingState
 from utilities.error_handler import (
     log_exception,
     handle_browser_error,
@@ -55,6 +57,9 @@ class MeetBot:
         self.participant_count = 0
         self.current_meeting_id: Optional[str] = None
         self.audio_chunks: Dict[str, List] = {}
+        
+        # Redis state manager (plug-and-play)
+        self.state_manager = get_state_manager()
         
         # Tasks
         self.caption_task: Optional[asyncio.Task] = None
@@ -283,6 +288,14 @@ class MeetBot:
     async def join_meeting(self, meeting_url: str):
         logger.info(f"Joining meeting: {meeting_url}")
         
+        # Update state: JOINING
+        if self.current_meeting_id:
+            await self.state_manager.set_state(
+                self.current_meeting_id,
+                MeetingState.JOINING,
+                {"meeting_url": meeting_url}
+            )
+        
         use_persistent_context = await self.ensure_auth_session(meeting_url)
         guest_name = "Stormee.Ai"
 
@@ -320,7 +333,22 @@ class MeetBot:
 
         if not is_admitted:
             logger.error("Timed out or failed to enter meeting room. Aborting post-join actions")
+            # Update state: ERROR
+            if self.current_meeting_id:
+                await self.state_manager.set_state(
+                    self.current_meeting_id,
+                    MeetingState.ERROR,
+                    {"error": "Failed to join meeting room"}
+                )
             return
+
+        # Update state: IN_MEETING
+        if self.current_meeting_id:
+            await self.state_manager.set_state(
+                self.current_meeting_id,
+                MeetingState.IN_MEETING,
+                {"participant_count": self.participant_count}
+            )
 
         # Ensure mic is muted once inside the active meeting
         try:
@@ -344,6 +372,14 @@ class MeetBot:
         self.scraping_active = True
         await self.turn_captions_on()
         self.caption_task = asyncio.create_task(self.scrape_captions())
+        
+        # Update state: CAPTION_STARTED
+        if self.current_meeting_id:
+            await self.state_manager.set_state(
+                self.current_meeting_id,
+                MeetingState.CAPTION_STARTED
+            )
+        
         logger.info("Caption scraping started")
 
     async def scrape_captions(self):
@@ -411,6 +447,15 @@ class MeetBot:
                 final_captions.append(entry)
 
         self.captions_segments = final_captions
+        
+        # Update state: CAPTION_STOPPED
+        if self.current_meeting_id:
+            await self.state_manager.set_state(
+                self.current_meeting_id,
+                MeetingState.CAPTION_STOPPED,
+                {"caption_count": len(final_captions)}
+            )
+        
         logger.info(f"Caption scraping stopped, {len(final_captions)} blocks saved")
         return self.captions_segments
         
@@ -431,6 +476,13 @@ class MeetBot:
         """Hard-fix chat scraper using continuous Python-side polling"""
         self.chat_segments = []
         self.chat_scraping_active = True
+        
+        # Update state: CHAT_SCRAPING_STARTED
+        if self.current_meeting_id:
+            await self.state_manager.set_state(
+                self.current_meeting_id,
+                MeetingState.CHAT_SCRAPING_STARTED
+            )
 
         # 1. Open the Chat Panel explicitly
         logger.debug("Ensuring chat panel is open")
@@ -557,6 +609,15 @@ class MeetBot:
     async def stop_chat_scraping(self) -> List[Dict]:
         """Stop chat monitoring"""
         self.chat_scraping_active = False
+        
+        # Update state: CHAT_SCRAPING_STOPPED
+        if self.current_meeting_id:
+            await self.state_manager.set_state(
+                self.current_meeting_id,
+                MeetingState.CHAT_SCRAPING_STOPPED,
+                {"chat_count": len(self.chat_segments)}
+            )
+        
         logger.info("Chat monitoring stopped")
         return self.chat_segments
 
@@ -592,6 +653,14 @@ class MeetBot:
                     if new != last:
                         logger.debug(f"Participants changed: {last} to {new}")
                         self.participant_count = new
+                        
+                        # Update state: PARTICIPANT_COUNT_CHANGED
+                        if self.current_meeting_id:
+                            await self.state_manager.set_state(
+                                self.current_meeting_id,
+                                MeetingState.PARTICIPANT_COUNT_CHANGED,
+                                {"participant_count": new, "previous_count": last}
+                            )
                     last = new
                     
                     if new == 1:
@@ -625,6 +694,14 @@ class MeetBot:
             return
 
         logger.info("Leaving meeting")
+        
+        # Update state: LEFT
+        if self.current_meeting_id:
+            await self.state_manager.set_state(
+                self.current_meeting_id,
+                MeetingState.LEFT,
+                {"timestamp": datetime.now().isoformat()}
+            )
 
         try:
             # 1. Stop background scraping tasks gracefully
@@ -755,6 +832,13 @@ class MeetBot:
         if not self.page:
             logger.error("No page available")
             return
+        
+        # Update state: RECORDING_STARTED
+        await self.state_manager.set_state(
+            meeting_id,
+            MeetingState.RECORDING_STARTED,
+            {"timestamp": datetime.now().isoformat()}
+        )
         
         self.current_meeting_id = meeting_id
         if meeting_id not in self.audio_chunks:
@@ -1071,6 +1155,14 @@ class MeetBot:
         meeting_id = self.current_meeting_id
         logger.info(f"Stopping recording for meeting: {meeting_id}")
         
+        # Update state: RECORDING_STOPPED
+        if meeting_id:
+            await self.state_manager.set_state(
+                meeting_id,
+                MeetingState.RECORDING_STOPPED,
+                {"timestamp": datetime.now().isoformat()}
+            )
+        
         # Stop the MediaRecorder
         await self.page.evaluate(RECORDING_STOPPER)
         
@@ -1293,6 +1385,9 @@ async def create_bot_for(meeting_id: str, meeting_url: str, *, user_name: Option
         logger.info(f"Creating new bot for meeting {meeting_id}")
         bot = MeetBot()
         
+        # Set current meeting ID for state tracking
+        bot.current_meeting_id = meeting_id
+        
         # Attach metadata to the bot instance for later use (emails, uploads, etc.)
         bot.user_name = user_name
         bot.user_email = user_email
@@ -1302,6 +1397,20 @@ async def create_bot_for(meeting_id: str, meeting_url: str, *, user_name: Option
 
         meet_bots[meeting_id] = bot
         logger.info(f"Bot registered for meeting {meeting_id}")
+        
+        # Update state: INITIALIZED
+        await bot.state_manager.set_state(
+            meeting_id,
+            MeetingState.INITIALIZED,
+            {
+                "user_name": user_name,
+                "user_email": user_email,
+                "project_id": bot.project_id,
+                "project_name": bot.project_name,
+                "meeting_title": meeting_title,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
 
         # Start join in background so API can return quickly
         try:

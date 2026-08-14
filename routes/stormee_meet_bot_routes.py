@@ -1,6 +1,6 @@
 import time
 import uuid
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from utilities.logging_context import RequestContext
 from controllers.stormee_meet_bot_controller import (
     exit_meeting_controller,
@@ -20,6 +20,8 @@ from controllers.stormee_meet_bot_controller import (
     MeetingActionRequest,
     PlayAudioRequest,
 )
+from services.meeting_state_manager import get_state_manager
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
@@ -68,6 +70,93 @@ async def health_check():
         message: Service is running
     """
     return {"status": "OK", "message": "Service is running"}
+
+
+@router.get("/meetings/{meeting_id}/state", tags=["Meeting State"], summary="Get current meeting state")
+async def get_meeting_state(meeting_id: str, _: None = Depends(extract_context)):
+    """
+    Get the current state of a meeting
+    
+    Args:
+        meeting_id: The meeting ID to get state for
+    
+    Returns:
+        Current state with timestamp and metadata
+    
+    Raises:
+        404: Meeting state not found
+    """
+    state_manager = get_state_manager()
+    state = await state_manager.get_state(meeting_id)
+    
+    if not state:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No state found for meeting {meeting_id}"
+        )
+    
+    return JSONResponse(
+        content={
+            "meeting_id": meeting_id,
+            "state": state
+        }
+    )
+
+
+@router.get("/meetings/{meeting_id}/states", tags=["Meeting State"], summary="Get meeting state history")
+async def get_meeting_state_history(
+    meeting_id: str,
+    limit: int = 100,
+    _: None = Depends(extract_context)
+):
+    """
+    Get the state history for a meeting
+    
+    Args:
+        meeting_id: The meeting ID to get history for
+        limit: Maximum number of history items to return (default: 100)
+    
+    Returns:
+        List of state changes (most recent first)
+    """
+    state_manager = get_state_manager()
+    history = await state_manager.get_state_history(meeting_id, limit=limit)
+    
+    return JSONResponse(
+        content={
+            "meeting_id": meeting_id,
+            "history": history,
+            "count": len(history)
+        }
+    )
+
+
+@router.delete("/meetings/{meeting_id}/state", tags=["Meeting State"], summary="Delete meeting state")
+async def delete_meeting_state(meeting_id: str, _: None = Depends(extract_context)):
+    """
+    Delete all state data for a meeting
+    
+    Args:
+        meeting_id: The meeting ID to delete state for
+    
+    Returns:
+        Confirmation message
+    """
+    state_manager = get_state_manager()
+    success = await state_manager.delete_state(meeting_id)
+    
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete meeting state"
+        )
+    
+    return JSONResponse(
+        content={
+            "message": f"State deleted for meeting {meeting_id}",
+            "meeting_id": meeting_id
+        }
+    )
 
 
 @router.post("/signin", tags=["Meeting Control"], summary="Join a Google Meet meeting")
@@ -202,8 +291,7 @@ async def play_audio(request: PlayAudioRequest, _: None = Depends(extract_contex
     
     Args:
         meetingId: The meeting ID where audio should be played
-        audioData: List of integers (0-255) representing encoded audio bytes
-                   (WebM, MP3, WAV, or other encoded audio formats)
+        audioUrl: Audio Stream url
         volume: Playback volume level (0.0 to 1.0, default 0.7)
     
     Returns:
@@ -213,7 +301,7 @@ async def play_audio(request: PlayAudioRequest, _: None = Depends(extract_contex
         volume: Playback volume level
     
     Raises:
-        400: Invalid input (missing meetingId, audioData, or invalid volume)
+        400: Invalid input (missing meetingId, audioUrl, or invalid volume)
         404: No active bot for the meeting
         500: Failed to play audio
     """

@@ -32,7 +32,7 @@ class MeetingActionRequest(BaseModel):
 
 class PlayAudioRequest(BaseModel):
     meetingId: str
-    audioData: list  # List of integers (0-255) representing audio bytes
+    audioUrl: str  
     volume: float = 0.7  # Volume level (0.0 to 1.0)
 
 
@@ -250,19 +250,19 @@ async def play_audio_controller(request: PlayAudioRequest):
     """Play audio data in the active meeting."""
     try:
         meeting_id = request.meetingId
-        audio_data = request.audioData
+        audio_url = request.audioUrl
         volume = request.volume
         
         logger.debug(
             f"Play audio request received [meeting_id={meeting_id}, "
-            f"audio_size={len(audio_data)} bytes, volume={volume}]"
+            f"audio_size={len(audio_url)} bytes, volume={volume}]"
         )
         
         if not meeting_id:
             logger.warning("Play audio validation failed: meetingId is required")
             raise HTTPException(status_code=400, detail="meetingId is required")
         
-        if not audio_data:
+        if not audio_url:
             logger.warning(f"Play audio validation failed for {meeting_id}: audioData is required")
             raise HTTPException(status_code=400, detail="audioData is required")
         
@@ -278,17 +278,17 @@ async def play_audio_controller(request: PlayAudioRequest):
             raise HTTPException(status_code=404, detail="No bot found for meetingId")
         
         # Play audio
-        result = await bot.play_audio_data(audio_data, volume=volume)
+        result = await bot.play_audio_url(audio_url, volume=volume)
         
         if result:
             logger.info(
                 f"Audio playback initiated for {meeting_id} "
-                f"[size={len(audio_data)} bytes, volume={volume}]"
+                f"[size={len(audio_url)} bytes, volume={volume}]"
             )
             return JSONResponse(content={
                 "message": "Audio playback initiated",
                 "meetingId": meeting_id,
-                "audioSize": len(audio_data),
+                "audioSize": len(audio_url),
                 "volume": volume
             })
         else:
