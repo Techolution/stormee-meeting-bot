@@ -695,13 +695,6 @@ class MeetBot:
 
         logger.info("Leaving meeting")
         
-        # Update state: LEFT
-        if self.current_meeting_id:
-            await self.state_manager.set_state(
-                self.current_meeting_id,
-                MeetingState.LEFT,
-                {"timestamp": datetime.now().isoformat()}
-            )
 
         try:
             # 1. Stop background scraping tasks gracefully
@@ -793,6 +786,13 @@ class MeetBot:
                     await leave_button.click(force=True)
 
             logger.info("Successfully clicked Leave Call button")
+            # Update state: LEFT
+            if self.current_meeting_id:
+                await self.state_manager.set_state(
+                    self.current_meeting_id,
+                    MeetingState.LEFT,
+                    {"timestamp": datetime.now().isoformat()}
+                )
             await asyncio.sleep(1.5)
 
         except Exception as e:
