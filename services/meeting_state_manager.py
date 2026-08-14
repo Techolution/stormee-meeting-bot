@@ -64,20 +64,39 @@ class RedisStateManager:
         self.redis_client: Optional[redis.Redis] = None
         self.is_enabled = False
         self.ttl = 3600  # Default 1 hour
+        self.initialization_error: Optional[str] = None
         
         try:
             # Check if state manager is enabled
-            self.is_enabled = config.get_bool("REDIS_ENABLED")
-            if not self.is_enabled:
-                logger.info("Redis state manager disabled via configuration")
+            try:
+                redis_enabled_raw = config.get_bool("REDIS_ENABLED")
+            except (ValueError, KeyError, TypeError):
+                redis_enabled_raw = True
+            
+            if not redis_enabled_raw:
+                self.is_enabled = False
+                logger.info(
+                    "\n" + "="*70
+                    + "\n⚪ Redis State Manager: DISABLED via configuration (REDIS_ENABLED=false)"
+                    + "\n" + "="*70
+                )
                 return
             
             # Get configuration
-            redis_host = config.get("REDIS_HOST")
+            redis_host = config.get("REDIS_HOST", default="localhost")
             redis_port = config.get_int("REDIS_PORT")
             redis_db = config.get_int("REDIS_DB")
             redis_password = config.get("REDIS_PASSWORD", default=None)
             self.ttl = config.get_int("MEETING_STATE_TTL")
+            
+            logger.info(
+                f"\n" + "="*70
+                + f"\n🔄 Redis State Manager: Connecting..."
+                + f"\n   Host: {redis_host}:{redis_port}"
+                + f"\n   Database: {redis_db}"
+                + f"\n   State TTL: {self.ttl}s"
+                + f"\n" + "="*70
+            )
             
             # Create Redis connection
             self.redis_client = redis.Redis(
@@ -96,16 +115,43 @@ class RedisStateManager:
             self.is_enabled = True
             
             logger.info(
-                f"Redis state manager initialized successfully "
-                f"(host={redis_host}, port={redis_port}, db={redis_db}, ttl={self.ttl}s)"
+                f"\n" + "="*70
+                + f"\n✅ Redis State Manager: CONNECTED SUCCESSFULLY"
+                + f"\n   Host: {redis_host}:{redis_port}"
+                + f"\n   Database: {redis_db}"
+                + f"\n   State TTL: {self.ttl}s"
+                + f"\n   Status: Ready to track meeting states"
+                + f"\n" + "="*70
+                + "\n"
             )
             
+        except ConnectionError as e:
+            self.is_enabled = False
+            self.redis_client = None
+            self.initialization_error = str(e)
+            logger.error(
+                f"\n" + "="*70
+                + f"\n❌ Redis State Manager: CONNECTION FAILED"
+                + f"\n   Error: Connection refused to {config.get('REDIS_HOST', default='localhost')}:{config.get_int('REDIS_PORT')}"
+                + f"\n   Details: {e}"
+                + f"\n   Action: Ensure Redis server is running and accessible"
+                + f"\n   Status: State tracking DISABLED (meeting bot will work normally)"
+                + f"\n" + "="*70
+                + "\n"
+            )
         except Exception as e:
             self.is_enabled = False
             self.redis_client = None
-            logger.warning(
-                f"Failed to initialize Redis state manager: {e}. "
-                "State tracking will be disabled. This is safe and non-breaking."
+            self.initialization_error = str(e)
+            error_type = type(e).__name__
+            logger.error(
+                f"\n" + "="*70
+                + f"\n❌ Redis State Manager: INITIALIZATION FAILED"
+                + f"\n   Error Type: {error_type}"
+                + f"\n   Details: {e}"
+                + f"\n   Status: State tracking DISABLED (meeting bot will work normally)"
+                + f"\n" + "="*70
+                + "\n"
             )
     
     async def set_state(
