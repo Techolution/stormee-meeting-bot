@@ -1,11 +1,5 @@
 INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
 (() => {
-    console.log("🎙️ Installing meeting audio pipeline...");
-
-    // ============================================================
-    // VIRTUAL MICROPHONE
-    // ============================================================
-
     const originalGetUserMedia =
         navigator.mediaDevices.getUserMedia.bind(
             navigator.mediaDevices
@@ -21,24 +15,26 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
     let micInitialized = false;
     let micInitializationPromise = null;
 
+    window.remoteAudioStreams =
+        window.remoteAudioStreams || [];
 
-    async function initializeVirtualMicrophone() {
+    async function initializeVirtualMic() {
         if (micInitialized && micTrack) {
             return;
         }
 
         if (micInitializationPromise) {
-            return micInitializationPromise;
+            await micInitializationPromise;
+            return;
         }
 
         micInitializationPromise = (async () => {
 
-            console.log("🎙️ Initializing virtual microphone...");
-
-            micAudioElement = document.createElement("audio");
+            micAudioElement =
+                document.createElement("audio");
 
             micAudioElement.id =
-                "__python_virtual_microphone_audio";
+                "__meeting_virtual_mic_audio";
 
             micAudioElement.crossOrigin = "anonymous";
             micAudioElement.preload = "auto";
@@ -48,57 +44,35 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
                 micAudioElement
             );
 
-
-            micAudioContext = new (
-                window.AudioContext ||
-                window.webkitAudioContext
-            )();
-
+            micAudioContext =
+                new (
+                    window.AudioContext ||
+                    window.webkitAudioContext
+                )();
 
             micSourceNode =
                 micAudioContext.createMediaElementSource(
                     micAudioElement
                 );
 
-
             micGainNode =
                 micAudioContext.createGain();
-
 
             micDestinationNode =
                 micAudioContext.createMediaStreamDestination();
 
-
             micGainNode.gain.value = 1.0;
 
+            micSourceNode.connect(micGainNode);
 
-            // Audio:
-            //
-            // HTMLAudioElement
-            //        ↓
-            // MediaElementSource
-            //        ↓
-            // GainNode
-            //        ↓
-            // MediaStreamDestination
-            //        ↓
-            // MediaStreamTrack
-            //        ↓
-            // Google Meet microphone
-            //
-
-            micSourceNode.connect(
-                micGainNode
-            );
-
+            // This is what Meet receives.
             micGainNode.connect(
                 micDestinationNode
             );
 
-
             const tracks =
-                micDestinationNode.stream.getAudioTracks();
-
+                micDestinationNode.stream
+                    .getAudioTracks();
 
             if (!tracks.length) {
                 throw new Error(
@@ -106,19 +80,14 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
                 );
             }
 
-
             micTrack = tracks[0];
-
-            micTrack.enabled = true;
 
             micInitialized = true;
 
             console.log(
                 "✅ Virtual microphone initialized"
             );
-
         })();
-
 
         try {
             await micInitializationPromise;
@@ -128,29 +97,24 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
     }
 
 
-    async function playIntoMicrophone(dataUrl) {
+    async function playIntoMic(audioUrl) {
 
-        await initializeVirtualMicrophone();
+        await initializeVirtualMic();
 
-
-        if (micAudioContext.state === "suspended") {
+        if (
+            micAudioContext.state ===
+            "suspended"
+        ) {
             await micAudioContext.resume();
         }
-
-
-        console.log(
-            "🎙️ Loading audio into virtual microphone..."
-        );
-
 
         micAudioElement.pause();
 
         micAudioElement.currentTime = 0;
 
-        micAudioElement.src = dataUrl;
+        micAudioElement.src = audioUrl;
 
         micAudioElement.load();
-
 
         await new Promise((resolve, reject) => {
 
@@ -159,20 +123,18 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
                 resolve();
             };
 
-
             const onError = (event) => {
                 cleanup();
 
                 reject(
                     new Error(
-                        "Failed to load microphone audio"
+                        "Failed to load audio: " +
+                        event
                     )
                 );
             };
 
-
             const cleanup = () => {
-
                 micAudioElement.removeEventListener(
                     "canplay",
                     onReady
@@ -184,13 +146,11 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
                 );
             };
 
-
             micAudioElement.addEventListener(
                 "canplay",
                 onReady,
                 { once: true }
             );
-
 
             micAudioElement.addEventListener(
                 "error",
@@ -199,79 +159,35 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
             );
         });
 
-
         await micAudioElement.play();
 
-
         console.log(
-            "🎙️ Python audio is now being sent to virtual microphone"
+            "▶️ Bot audio playing into virtual mic"
         );
     }
 
 
-    function stopMicrophoneAudio() {
-
-        if (!micAudioElement) {
-            return;
-        }
-
-        micAudioElement.pause();
-
-        micAudioElement.currentTime = 0;
-
-        console.log(
-            "⏹️ Virtual microphone audio stopped"
-        );
-    }
-
-
-    function pauseMicrophoneAudio() {
-
-        if (micAudioElement) {
-            micAudioElement.pause();
-        }
-    }
-
-
-    async function resumeMicrophoneAudio() {
-
-        if (!micAudioElement) {
-            return;
-        }
-
-
-        if (
-            micAudioContext &&
-            micAudioContext.state === "suspended"
-        ) {
-            await micAudioContext.resume();
-        }
-
-
-        await micAudioElement.play();
-    }
-
-
-    function setMicrophoneVolume(volume) {
+    function setMicVolume(volume) {
 
         if (!micGainNode) {
             return;
         }
 
-
-        volume = Math.max(
-            0,
-            Math.min(1, Number(volume))
-        );
-
-
-        micGainNode.gain.value = volume;
+        micGainNode.gain.value =
+            Math.max(
+                0,
+                Math.min(1, volume)
+            );
+    }
 
 
-        console.log(
-            "🎙️ Virtual microphone volume:",
-            volume
-        );
+    function getVirtualMicStream() {
+
+        if (!micDestinationNode) {
+            return null;
+        }
+
+        return micDestinationNode.stream;
     }
 
 
@@ -283,258 +199,138 @@ INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT = """
         async function(constraints) {
 
             console.log(
-                "🎙️ getUserMedia requested:",
+                "🎙️ getUserMedia:",
                 constraints
             );
-
 
             if (
                 constraints &&
                 constraints.audio
             ) {
 
-                await initializeVirtualMicrophone();
-
-
-                const track =
-                    micTrack.clone();
-
-
-                track.enabled = true;
-
+                await initializeVirtualMic();
 
                 const stream =
                     new MediaStream();
 
-
-                stream.addTrack(track);
-
-
-                console.log(
-                    "🎙️ Returning virtual microphone stream"
+                stream.addTrack(
+                    micTrack.clone()
                 );
-
 
                 return stream;
             }
 
-
-            // Keep normal camera behavior.
             return originalGetUserMedia(
                 constraints
             );
         };
 
-
-    // ============================================================
-    // REMOTE WEBRTC AUDIO CAPTURE
-    // ============================================================
-
     const OriginalRTCPeerConnection =
         window.RTCPeerConnection;
 
-
-    window.remoteAudioStreams =
-        window.remoteAudioStreams || [];
-
-
-    window.remoteAudioTracks =
-        window.remoteAudioTracks || [];
-
-
-    window.RTCPeerConnection =
-        function(...args) {
-
-            console.log(
-                "🌐 RTCPeerConnection created"
-            );
-
+        function WrappedRTCPeerConnection(...args) {
 
             const pc =
                 new OriginalRTCPeerConnection(...args);
 
+        pc.addEventListener(
+            "track",
+            (event) => {
 
-            pc.addEventListener(
-                "track",
-                (event) => {
+                if (
+                    event.track.kind !== "audio"
+                ) {
+                    return;
+                }
 
-                    console.log(
-                        "📥 WebRTC track received:",
-                        event.track.kind
-                    );
+                const stream =
+                    event.streams &&
+                    event.streams.length
+                        ? event.streams[0]
+                        : null;
 
+                if (!stream) {
+                    return;
+                }
 
-                    if (
-                        event.track.kind !== "audio"
-                    ) {
-                        return;
-                    }
+                window.remoteAudioStreams = window.remoteAudioStreams || [];
 
+                if (
+                    !window.remoteAudioStreams
+                        .includes(stream)
+                ) {
 
-                    const remoteStream =
-                        event.streams &&
-                        event.streams.length > 0
-                            ? event.streams[0]
-                            : null;
-
-
-                    if (!remoteStream) {
-
-                        console.warn(
-                            "⚠️ Remote audio track has no stream"
-                        );
-
-                        return;
-                    }
-
-
-                    // Avoid storing the exact same stream repeatedly.
-                    if (
-                        !window.remoteAudioStreams.includes(
-                            remoteStream
-                        )
-                    ) {
-
-                        window.remoteAudioStreams.push(
-                            remoteStream
-                        );
-                    }
-
-
-                    if (
-                        !window.remoteAudioTracks.includes(
-                            event.track
-                        )
-                    ) {
-
-                        window.remoteAudioTracks.push(
-                            event.track
-                        );
-                    }
-
-
-                    console.log(
-                        "📥 Remote audio stream captured"
-                    );
-
-
-                    window.dispatchEvent(
-                        new CustomEvent(
-                            "remoteStreamAdded",
-                            {
-                                detail: {
-                                    stream: remoteStream,
-                                    track: event.track
-                                }
-                            }
-                        )
+                    window.remoteAudioStreams.push(
+                        stream
                     );
                 }
-            );
 
+                console.log(
+                    "📥 Remote audio stream captured"
+                );
 
-            return pc;
-        };
+                window.dispatchEvent(
+                    new CustomEvent(
+                        "remoteStreamAdded",
+                        {
+                            detail: stream
+                        }
+                    )
+                );
+            }
+        );
 
+        return pc;
+    }
+
+    WrappedRTCPeerConnection.prototype =
+        OriginalRTCPeerConnection.prototype;
+
+    Object.setPrototypeOf(
+        WrappedRTCPeerConnection,
+        OriginalRTCPeerConnection
+    );
+
+    window.RTCPeerConnection = WrappedRTCPeerConnection;
 
     // ============================================================
     // PUBLIC API
     // ============================================================
 
     window.__meetingAudio = {
-        
-        // Virtual microphone
-        initializeVirtualMic: async () => {
-            await initializeVirtualMicrophone();
-            return true;
-        },
 
-        playIntoMic: async (dataUrl) => {
-            await playIntoMicrophone(dataUrl);
-        },
+        initializeVirtualMic,
 
-        stopMic: () => {
-            stopMicrophoneAudio();
-        },
+        playIntoMic,
 
-        pauseMic: () => {
-            pauseMicrophoneAudio();
-        },
+        setMicVolume,
 
-        resumeMic: async () => {
-            await resumeMicrophoneAudio();
-        },
+        getVirtualMicStream,
 
-        setMicVolume: (volume) => {
-            setMicrophoneVolume(volume);
-        },
+        getMicState: () => ({
+            initialized: micInitialized,
 
-        getVirtualMicStream: () => {
-            if (!micDestinationNode) {
-                return null;
-            }
+            audioContextState:
+                micAudioContext
+                    ? micAudioContext.state
+                    : null,
 
-            return micDestinationNode.stream;
-        },
+            playing:
+                micAudioElement
+                    ? !micAudioElement.paused
+                    : false,
 
+            trackEnabled:
+                micTrack
+                    ? micTrack.enabled
+                    : false,
 
-        // Remote WebRTC
-        getRemoteStreams: () => {
-            return window.remoteAudioStreams;
-        },
-
-        getRemoteTracks: () => {
-            return window.remoteAudioTracks;
-        },
-
-        getRemoteStreamCount: () => {
-            return window.remoteAudioStreams.length;
-        },
-
-
-        // Debugging
-        getMicState: () => {
-
-            return {
-                initialized: micInitialized,
-
-                audioContextState:
-                    micAudioContext
-                        ? micAudioContext.state
-                        : null,
-
-                playing:
-                    micAudioElement
-                        ? !micAudioElement.paused
-                        : false,
-
-                currentTime:
-                    micAudioElement
-                        ? micAudioElement.currentTime
-                        : 0,
-
-                duration:
-                    micAudioElement
-                        ? micAudioElement.duration
-                        : 0,
-
-                trackEnabled:
-                    micTrack
-                        ? micTrack.enabled
-                        : false,
-
-                trackReadyState:
-                    micTrack
-                        ? micTrack.readyState
-                        : null
-            };
-        }
+            trackReadyState:
+                micTrack
+                    ? micTrack.readyState
+                    : null
+        })
     };
-
-
-    console.log(
-        "✅ Meeting audio pipeline installed"
-    );
 
 })();
 """
@@ -547,27 +343,40 @@ UNSET_WEB_DRIVER = """
 
 RECORDING_STARTER = """
     async (meetingId) => {
+
         try {
+
+            // =====================================================
+            // INITIALIZE VIRTUAL MIC
+            // =====================================================
+
             if (
                 window.__meetingAudio &&
                 window.__meetingAudio.initializeVirtualMic
             ) {
-                await window.__meetingAudio.initializeVirtualMic();
+                await window.__meetingAudio
+                    .initializeVirtualMic();
             }
-            // ======================================================
-            // CLEAN UP PREVIOUS RECORDER
-            // ======================================================
+
+
+            // =====================================================
+            // CLEANUP OLD RECORDER
+            // =====================================================
 
             if (window.mediaRecorder) {
+
                 try {
+
                     if (
-                        window.mediaRecorder.state !== "inactive"
+                        window.mediaRecorder.state !==
+                        "inactive"
                     ) {
                         window.mediaRecorder.stop();
                     }
+
                 } catch (e) {
                     console.warn(
-                        "Failed to stop previous recorder:",
+                        "Failed stopping old recorder:",
                         e
                     );
                 }
@@ -576,48 +385,24 @@ RECORDING_STARTER = """
             }
 
 
-            // ======================================================
-            // REMOVE PREVIOUS REMOTE STREAM LISTENER
-            // ======================================================
+            // =====================================================
+            // REMOVE OLD LISTENER
+            // =====================================================
 
             if (window.remoteStreamListener) {
-                try {
-                    window.removeEventListener(
-                        "remoteStreamAdded",
-                        window.remoteStreamListener
-                    );
-                } catch (e) {
-                    console.warn(
-                        "Failed to remove old remote listener:",
-                        e
-                    );
-                }
+
+                window.removeEventListener(
+                    "remoteStreamAdded",
+                    window.remoteStreamListener
+                );
 
                 window.remoteStreamListener = null;
             }
 
 
-            // ======================================================
-            // CLOSE PREVIOUS RECORDING AUDIO CONTEXT
-            // ======================================================
-
-            if (window.recordingAudioContext) {
-                try {
-                    await window.recordingAudioContext.close();
-                } catch (e) {
-                    console.warn(
-                        "Failed to close previous AudioContext:",
-                        e
-                    );
-                }
-
-                window.recordingAudioContext = null;
-            }
-
-
-            // ======================================================
+            // =====================================================
             // CREATE RECORDING AUDIO CONTEXT
-            // ======================================================
+            // =====================================================
 
             const audioCtx = new (
                     window.AudioContext ||
@@ -632,7 +417,10 @@ RECORDING_STARTER = """
             }
 
 
-            // This is the final mixed audio stream.
+            // =====================================================
+            // FINAL RECORDING DESTINATION
+            // =====================================================
+
             const destination =
                 audioCtx.createMediaStreamDestination();
 
@@ -640,44 +428,38 @@ RECORDING_STARTER = """
                 destination;
 
 
-            // ======================================================
-            // PREVENT DUPLICATE CONNECTIONS
-            // ======================================================
+            // =====================================================
+            // TRACK WHICH STREAMS WE CONNECTED
+            // =====================================================
 
             const connectedStreams = new WeakSet();
 
 
-            function connectStreamToRecording(
+            function connectToRecording(
                 stream,
                 label
             ) {
+
                 if (!stream) {
                     return;
                 }
 
-                try {
+                if (
+                    connectedStreams.has(stream)
+                ) {
+                    return;
+                }
 
-                    if (connectedStreams.has(stream)) {
-                        console.log(
-                            `⚠️ ${label} already connected`
-                        );
+                const tracks =
+                    stream.getAudioTracks();
 
-                        return;
-                    }
+                if (!tracks.length) {
+                    console.warn(
+                        `⚠️ ${label} has no audio`
+                    );
 
-
-                    const audioTracks =
-                        stream.getAudioTracks();
-
-
-                    if (!audioTracks.length) {
-                        console.warn(
-                            `⚠️ ${label} has no audio tracks`
-                        );
-
-                        return;
-                    }
-
+                    return;
+                }
 
                     const source =
                         audioCtx.createMediaStreamSource(
@@ -691,143 +473,70 @@ RECORDING_STARTER = """
                     connectedStreams.add(stream);
 
 
-                    console.log(
-                        `🔊 Connected ${label} to recording`
-                    );
-
-                } catch (e) {
-
-                    console.error(
-                        `❌ Failed to connect ${label}:`,
-                        e
-                    );
-                }
-            }
-
-
-            // ======================================================
-            // CONNECT BOT / VIRTUAL MICROPHONE AUDIO
-            // ======================================================
-
-            try {
-
-                if (
-                    window.__meetingAudio &&
-                    window.__meetingAudio.getVirtualMicStream
-                ) {
-
-                    const virtualMicStream =
-                        window.__meetingAudio
-                            .getVirtualMicStream();
-
-
-                    if (virtualMicStream) {
-
-                        connectStreamToRecording(
-                            virtualMicStream,
-                            "bot / virtual microphone audio"
-                        );
-
-                    } else {
-
-                        console.warn(
-                            "⚠️ Virtual microphone stream " +
-                            "not initialized yet"
-                        );
-                    }
-
-                } else {
-
-                    console.warn(
-                        "⚠️ __meetingAudio.getVirtualMicStream " +
-                        "is not available"
-                    );
-                }
-
-            } catch (e) {
-
-                console.error(
-                    "❌ Failed to connect virtual mic:",
-                    e
+                console.log(
+                    `🔊 Recording: ${label}`
                 );
             }
 
 
-            // ======================================================
-            // CONNECT EXISTING REMOTE WEBRTC STREAMS
-            // ======================================================
+            // =====================================================
+            // BOT AUDIO
+            // =====================================================
+
+            const virtualMicStream =
+                window.__meetingAudio
+                    .getVirtualMicStream();
+
+
+            if (!virtualMicStream) {
+
+                throw new Error(
+                    "Virtual microphone stream unavailable"
+                );
+            }
+
+
+            connectToRecording(
+                virtualMicStream,
+                "BOT AUDIO"
+            );
+
+
+            // =====================================================
+            // EXISTING REMOTE AUDIO
+            // =====================================================
 
             if (
-                window.remoteAudioStreams &&
-                window.remoteAudioStreams.length > 0
+                window.remoteAudioStreams
             ) {
 
-                window.remoteAudioStreams.forEach(
-                    (stream, index) => {
+                window.remoteAudioStreams
+                    .forEach(
+                        (stream, index) => {
 
-                        connectStreamToRecording(
-                            stream,
-                            `remote stream ${index}`
-                        );
-
-                    }
-                );
-
-            } else {
-
-                console.warn(
-                    "⚠️ No remote audio streams yet"
-                );
+                            connectToRecording(
+                                stream,
+                                `REMOTE ${index}`
+                            );
+                        }
+                    );
             }
 
 
-            // ======================================================
-            // CONNECT FUTURE REMOTE STREAMS
-            // ======================================================
+            // =====================================================
+            // FUTURE REMOTE AUDIO
+            // =====================================================
 
             window.remoteStreamListener =
                 (event) => {
 
-                    try {
+                    const stream =
+                        event.detail;
 
-                        const detail =
-                            event.detail;
-
-
-                        // Support both:
-                        //
-                        // CustomEvent({ detail: stream })
-                        //
-                        // and
-                        //
-                        // CustomEvent({
-                        //     detail: {
-                        //         stream,
-                        //         track
-                        //     }
-                        // })
-                        //
-
-                        const stream =
-                            detail &&
-                            detail.stream
-                                ? detail.stream
-                                : detail;
-
-
-                        connectStreamToRecording(
-                            stream,
-                            "new remote stream"
-                        );
-
-                    } catch (e) {
-
-                        console.error(
-                            "❌ Failed to connect new " +
-                            "remote stream:",
-                            e
-                        );
-                    }
+                    connectToRecording(
+                        stream,
+                        "REMOTE NEW"
+                    );
                 };
 
 
@@ -837,145 +546,81 @@ RECORDING_STARTER = """
             );
 
 
-            // ======================================================
-            // CREATE MEDIA RECORDER
-            // ======================================================
+            // =====================================================
+            // CREATE RECORDER
+            // =====================================================
 
-            const mixedStream =
+            const recordingStream =
                 destination.stream;
 
 
-            console.log(
-                "🎙️ Recording audio tracks:",
-                mixedStream.getAudioTracks().length
-            );
-
-
-            const mediaRecorder =
+            const recorder =
                 new MediaRecorder(
-                    mixedStream,
+                    recordingStream,
                     {
                         mimeType:
-                            "audio/webm; codecs=opus"
+                            "audio/webm;codecs=opus"
                     }
                 );
 
 
             window.mediaRecorder =
-                mediaRecorder;
+                recorder;
 
 
-            // ======================================================
-            // CHUNK STATE
-            // ======================================================
+            // =====================================================
+            // CHUNKS
+            // =====================================================
 
             window.chunkCounter = 0;
 
             window.pendingAudioChunkPromises = [];
 
 
-            // ======================================================
-            // AUDIO CHUNKS
-            // ======================================================
-
-            mediaRecorder.ondataavailable =
+            recorder.ondataavailable =
                 async (event) => {
 
-                    if (event.data.size <= 0) {
+                    if (
+                        event.data.size === 0
+                    ) {
                         return;
                     }
 
-
                     const chunkId =
                         `${meetingId}-${window.chunkCounter++}`;
-
 
                     const timestamp =
                         new Date().toISOString();
 
 
-                    const sendPromise =
-                        (async () => {
-
-                            try {
-
-                                const arrayBuffer =
-                                    await event.data.arrayBuffer();
+                    const buffer =
+                        await event.data
+                            .arrayBuffer();
 
 
-                                const audioBlob =
-                                    Array.from(
-                                        new Uint8Array(
-                                            arrayBuffer
-                                        )
-                                    );
+                    const audioBlob =
+                        Array.from(
+                            new Uint8Array(buffer)
+                        );
 
 
-                                console.log(
-                                    `📤 Chunk ready: ` +
-                                    `${chunkId}, ` +
-                                    `size: ` +
-                                    `${event.data.size} bytes`
-                                );
+                    const promise =
+                        window
+                            .sendAudioChunkToPython({
+                                meetingId,
+                                chunkId,
+                                timestamp,
+                                audioBlob
+                            });
 
 
-                                if (
-                                    window.sendAudioChunkToPython
-                                ) {
-
-                                    try {
-
-                                        await window
-                                            .sendAudioChunkToPython({
-                                                meetingId:
-                                                    meetingId,
-
-                                                chunkId:
-                                                    chunkId,
-
-                                                timestamp:
-                                                    timestamp,
-
-                                                audioBlob:
-                                                    audioBlob
-                                            });
-
-                                    } catch (error) {
-
-                                        console.error(
-                                            "❌ Error sending " +
-                                            "chunk:",
-                                            error
-                                        );
-                                    }
-
-                                } else {
-
-                                    console.error(
-                                        "❌ sendAudioChunkToPython " +
-                                        "not available"
-                                    );
-                                }
-
-                            } catch (error) {
-
-                                console.error(
-                                    "❌ Failed to process " +
-                                    "audio chunk:",
-                                    error
-                                );
-                            }
-
-                        })();
-
-
-                    window.pendingAudioChunkPromises.push(
-                        sendPromise
-                    );
+                    window
+                        .pendingAudioChunkPromises
+                        .push(promise);
 
 
                     try {
-                        await sendPromise;
+                        await promise;
                     } finally {
 
                         window
@@ -983,70 +628,57 @@ RECORDING_STARTER = """
                             window
                                 .pendingAudioChunkPromises
                                 .filter(
-                                    (promise) =>
-                                        promise !==
-                                        sendPromise
+                                    p =>
+                                        p !== promise
                                 );
                     }
                 };
 
 
-            // ======================================================
-            // RECORDER EVENTS
-            // ======================================================
-
-            mediaRecorder.onerror =
+            recorder.onerror =
                 (event) => {
 
                     console.error(
-                        "❌ MediaRecorder error:",
+                        "❌ Recorder error:",
                         event.error
                     );
                 };
 
 
-            mediaRecorder.onstart =
+            recorder.onstart =
                 () => {
 
                     console.log(
-                        "▶️ MediaRecorder started"
+                        "▶️ Recording started"
                     );
                 };
 
 
-            mediaRecorder.onstop =
+            recorder.onstop =
                 () => {
 
                     console.log(
-                        "🛑 MediaRecorder stopped"
+                        "🛑 Recording stopped"
                     );
                 };
 
 
-            // ======================================================
+            // =====================================================
             // START
-            // ======================================================
+            // =====================================================
 
-            mediaRecorder.start(5000);
+            recorder.start(5000);
 
 
             console.log(
-                "✅ Recording started for:",
+                "✅ Recording started:",
                 meetingId
             );
-
-
-            console.log(
-                "🎙️ Recording contains:",
-                "remote WebRTC audio + " +
-                "bot virtual microphone audio"
-            );
-
 
         } catch (error) {
 
             console.error(
-                "❌ Error starting recording:",
+                "❌ Recording initialization failed:",
                 error
             );
 

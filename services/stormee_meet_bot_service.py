@@ -6,12 +6,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
 import uuid
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright.async_api import Page
 import socketio
 from dotenv import load_dotenv
 import re
 
-from utilities.meet_utils.google_meet.js_helpers import INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT, RECORDING_STARTER, RECORDING_STOPPER, UNSET_WEB_DRIVER
+from utilities.meet_utils.google_meet.js_helpers import RECORDING_STARTER, RECORDING_STOPPER
 
 # Get module-level logger
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ from utilities.meet_utils.google_meet.meet_action_controller import ActionContro
 from utilities.env_config import config
 from services.websocket_manager import WebSocketManager
 from services.audio_queue_manager import AudioQueueManager
-
+from services.browser_manager import BrowserManager
 from services.meeting_state_manager import get_state_manager, MeetingState
 from utilities.error_handler import (
     log_exception,
@@ -35,18 +35,15 @@ from utilities.error_handler import (
 
 load_dotenv()
 
-PROFILE_DIR = Path(config.get('PROFILE_DIR'))
 project_id = config.get('PROJECT_ID')
 project_name = config.get('PROJECT_NAME')
 
 class MeetBot:
     def __init__(self):
         self.action_controller = ActionController(lambda: self.page)
-        self.browser: Optional[Browser] = None
-        self.context: Optional[BrowserContext] = None
+        # Browser management is now delegated to BrowserManager
+        self.browser_manager = BrowserManager()
         self.page: Optional[Page] = None
-        self.playwright = None
-        self.browser_type = "chromium"  # Track which browser is being used
         
         # State management
         self.captions_segments: List[Dict] = []
@@ -77,138 +74,42 @@ class MeetBot:
         self.websocket_manager.set_on_reconnect_success(self._on_websocket_reconnect)
 
     async def ensure_auth_session(self, meeting_url: str):
-        """Initialize browser with conditional profile persistence based on PROFILE_DIR availability.
+        """Initialize browser session using BrowserManager.
         
-        If PROFILE_DIR exists or can be created, launches persistent context (preserves cookies, cache, etc).
-        If PROFILE_DIR cannot be created, falls back to normal chromium launch (ephemeral session).
+        Delegates all browser-specific logic to BrowserManager, which handles:
+        - Conditional profile persistence based on PROFILE_DIR availability
+        - Chromium launch with retry logic
+        - Script injection and configuration
+        - Navigation to meeting URL
+        
+        Returns:
+            True if using persistent context, False if ephemeral session.
         """
-        logger.info("Initializing browser")
-
-        max_retries = 3
-        retry_delay = 3
-        timeout_ms = 30_000
-
-        for attempt in range(1, max_retries + 1):
+        logger.info("Initializing browser via BrowserManager")
+        
+        try:
+            use_persistent_context = await self.browser_manager.initialize_and_navigate(
+                meeting_url
+            )
+            
+            # Get the page from browser manager
+            self.page = self.browser_manager.page
+            
+            logger.info(
+                f"Browser initialized successfully "
+                f"(persistent={use_persistent_context})"
+            )
+            
+            return use_persistent_context
+            
+        except Exception as e:
+            logger.error(f"Browser initialization failed: {e}")
+            # Cleanup browser manager resources on failure
             try:
-                self.playwright = await async_playwright().start()
-
-                try:
-                    is_headless = config.get_bool("HEADLESS")
-                except ValueError:
-                    is_headless = True
-
-                # Check if PROFILE_DIR exists or can be created
-                use_persistent_context = False
-                try:
-                    # PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                    if PROFILE_DIR.exists():
-                        use_persistent_context = True
-                        logger.info(f"Profile directory exists: {PROFILE_DIR}. Using persistent context.")
-                    else:
-                        logger.warning(f"Could not create profile directory: {PROFILE_DIR}. Using ephemeral session.")
-                except Exception as e:
-                    logger.warning(f"Failed to create profile directory: {e}. Using ephemeral session.")
-
-                # Launch chromium with or without persistent context
-                if use_persistent_context:
-                    self.context = await self.playwright.chromium.launch_persistent_context(
-                        user_data_dir=str(PROFILE_DIR.resolve()),
-                        headless=is_headless,
-                        channel="chromium",
-                        permissions=["microphone", "camera"],
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--start-maximized",
-                            "--use-fake-device-for-media-stream",
-                            "--use-fake-ui-for-media-stream",
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                        ],
-                        viewport=None,
-                        timeout=timeout_ms,
-                    )
-                else:
-                    # Launch normal chromium and create a new page
-                    self.browser = await self.playwright.chromium.launch(
-                        headless=is_headless,
-                        channel="chromium",
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--start-maximized",
-                            "--use-fake-device-for-media-stream",
-                            "--use-fake-ui-for-media-stream",
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                        ],
-                    )
-                    self.context = await self.browser.new_context(
-                        permissions=["microphone", "camera"],
-                        viewport=None,
-                    )
-
-                await self.context.add_init_script(UNSET_WEB_DRIVER)
-
-                if self.context.pages:
-                    self.page = self.context.pages[0]
-                else:
-                    self.page = await self.context.new_page()
-
-                await self.page.add_init_script(INITIALIZE_SEPRATE_AUDIO_CHANNELS_FOR_REMOTE_AND_INPUT)
-
-                logger.debug(f"Navigating to meeting URL: {meeting_url}")
-
-                await self.page.goto(
-                    meeting_url,
-                    timeout=timeout_ms,
-                    wait_until="domcontentloaded",
-                )
-                if "accounts.google.com" in self.page.url:
-                    logger.error("Meeting requires Google Sign-In. Aborting anonymous join.")
-                    raise PermissionError("Meeting requires Google Sign-In.")
-                logger.info(
-                    f"Browser initialized successfully on attempt {attempt}"
-                )
-
-                return use_persistent_context
-
-            except Exception as e:
-                logger.warning(
-                    f"Browser initialization failed "
-                    f"(attempt {attempt}/{max_retries}): {e}"
-                )
-
-                # Cleanup failed attempt
-                try:
-                    if self.context:
-                        await self.context.close()
-                except Exception:
-                    pass
-
-                try:
-                    if self.browser:
-                        await self.browser.close()
-                except Exception:
-                    pass
-
-                try:
-                    if self.playwright:
-                        await self.playwright.stop()
-                except Exception:
-                    pass
-
-                self.browser = None
-                self.context = None
-                self.page = None
-                self.playwright = None
-
-                if attempt == max_retries:
-                    logger.error("Browser initialization failed after all retries")
-                    raise
-
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
+                await self.browser_manager.close()
+            except Exception:
+                pass
+            raise
 
 
     async def pause_camera_in_meet(self):
@@ -798,24 +699,16 @@ class MeetBot:
         except Exception as e:
             logger.warning(f"Error clicking leave button: {e}")
 
-        # 4. Clean up Playwright Contexts safely
+        # 4. Clean up browser resources via BrowserManager
         finally:
             try:
-                if self.page and not self.page.is_closed():
-                    await self.page.close()
-                if self.context:
-                    await self.context.close()
-                if self.browser:
-                    await self.browser.close()
-                if hasattr(self, "playwright") and self.playwright:
-                    await self.playwright.stop()
+                # Close browser manager which handles all cleanup
+                await self.browser_manager.close()
             except Exception as cleanup_err:
                 logger.warning(f"Cleanup warning: {cleanup_err}")
 
-            # Reset state variables
+            # Reset page reference
             self.page = None
-            self.context = None
-            self.browser = None
             logger.info("Left meeting and cleaned up browser resources")
 
     async def play_audio(self):
@@ -840,6 +733,33 @@ class MeetBot:
             {"timestamp": datetime.now().isoformat()}
         )
         
+        state = await self.page.evaluate(
+            """
+            () => ({
+                meetingAudio:
+                    !!window.__meetingAudio,
+
+                virtualMic:
+                    !!(
+                        window.__meetingAudio &&
+                        window.__meetingAudio
+                            .getVirtualMicStream &&
+                        window.__meetingAudio
+                            .getVirtualMicStream()
+                    ),
+
+                remoteStreams:
+                    window.remoteAudioStreams
+                        ? window.remoteAudioStreams.length
+                        : 0
+            })
+            """
+        )
+
+        logger.info(
+            "Audio architecture state: %s",
+            state,
+        )
         self.current_meeting_id = meeting_id
         if meeting_id not in self.audio_chunks:
             self.audio_chunks[meeting_id] = []
