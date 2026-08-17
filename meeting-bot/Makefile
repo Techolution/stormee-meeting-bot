@@ -113,6 +113,10 @@ docker-shell: ## Open a shell in the image
 auth-profile: ## Sign in to Google once and persist the browser profile
 	$(BIN)/python scripts/create_auth_profile.py
 
+.PHONY: auth-profile-docker
+auth-profile-docker: ## Sign in to Google using Docker and persist the browser profile
+	$(SHELL) scripts/create_auth_profile_docker.sh
+
 .PHONY: clean
 clean: ## Remove build and test artefacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
