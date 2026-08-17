@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "GMeet Bot Control",
+  "version": "1.0",
+  "description": "Start and stop a Google Meet bot directly from your browser extension popup.",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://localhost:5000/*",
+    "https://dev.appmod.ai/*"
+  ]
+}
