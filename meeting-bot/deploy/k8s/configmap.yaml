@@ -1,0 +1,56 @@
+# Non-secret configuration.
+#
+# Secrets — REDIS_PASSWORD and anything else credential-bearing — belong in the
+# meeting-bot-secrets Secret referenced by the Deployment, not here.
+#
+# See docs/CONFIGURATION.md for every available setting.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meeting-bot-config
+  labels:
+    app.kubernetes.io/name: meeting-bot
+data:
+  # --- CW backend: where recordings are stored and registered ---------------
+  CW_UTILS_URL: "https://dev.appmod.ai"
+  PROJECT_ID: "" # default project when a join request omits projectId
+  PROJECT_NAME: ""
+
+  # --- Audio service --------------------------------------------------------
+  # Empty means this pod performs the resumable upload itself.
+  WEBSOCKET_URL: "http://audio-service.default.svc.cluster.local:5000"
+  RECORDING_UPLOAD_TRANSPORT: "websocket"
+
+  # --- Meeting-state persistence -------------------------------------------
+  # Optional. Losing Redis loses history, not correctness.
+  REDIS_ENABLED: "true"
+  REDIS_HOST: "redis.default.svc.cluster.local"
+  REDIS_PORT: "6379"
+  REDIS_STATE_TTL_SECONDS: "3600"
+
+  # --- Meeting behaviour ----------------------------------------------------
+  # The bot occupies a pod for the whole admission wait; raise deliberately.
+  MEETING_ADMISSION_TIMEOUT_SECONDS: "300"
+  # Must stay well above a reconnect: a brief drop to one participant is
+  # routine, and leaving on it abandons live meetings.
+  MEETING_SOLO_GRACE_PERIOD_SECONDS: "120"
+  MEETING_CHAT_COMMANDS_ENABLED: "true"
+
+  # --- Recording ------------------------------------------------------------
+  RECORDING_CHUNK_DURATION_MS: "5000"
+  # Bound on audio held while the destination is unreachable. Roughly 8 minutes
+  # of outage at these values; raise both together, along with the memory limit.
+  RECORDING_QUEUE_MAX_CHUNKS: "100"
+  RECORDING_QUEUE_MAX_MEMORY_MB: "10"
+
+  # --- Transcription --------------------------------------------------------
+  TRANSCRIPTION_PROVIDER: "caption"
+
+  # --- Attribution fallbacks ------------------------------------------------
+  DEFAULT_USER_NAME: "Meeting Bot"
+  DEFAULT_USER_EMAIL: "no-reply@example.com"
+
+  # --- HTTP -----------------------------------------------------------------
+  # Narrow this to the dispatcher's origin in production.
+  CORS_ORIGINS: "*"

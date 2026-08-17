@@ -1,0 +1,54 @@
+# Repository-wide ignores.
+#
+# Per-project rules live in meeting-bot/.gitignore. The entries here are the ones
+# that must hold everywhere, regardless of which directory someone is working in.
+
+# --- Credentials ----------------------------------------------------------
+# auth.json is a Playwright storage-state file: it contains live Google session
+# cookies and is equivalent to a password for that account.
+auth.json
+*auth.json
+.env
+.env.*
+!.env.example
+chrome_profile/
+*.credentials.json
+*.pem
+*.key
+
+# --- Meeting artefacts ----------------------------------------------------
+# Recordings and transcripts belong in object storage.
+*.webm
+*.mp3
+*.wav
+*.docx
+recordings/
+screenshots/
+
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# --- Environments and tooling caches --------------------------------------
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# --- Editors and OS -------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Logs -----------------------------------------------------------------
+*.log
+logs/

@@ -1,0 +1,34 @@
+# Runtime dependencies, pinned for reproducible builds.
+#
+# pyproject.toml holds compatible ranges; this file is the resolved lock the
+# image is built from. Regenerate after changing pyproject.toml:
+#
+#   make lock
+#
+# Development tooling is not listed here — install it with `pip install -e ".[dev]"`.
+
+# --- Web framework ---------------------------------------------------------
+fastapi==0.116.1
+starlette==0.47.1
+uvicorn[standard]==0.35.0
+python-multipart==0.0.20
+
+# --- Configuration and validation -----------------------------------------
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-dotenv==1.1.1
+
+# --- HTTP client -----------------------------------------------------------
+httpx==0.28.1
+httpcore==1.0.9
+
+# --- Browser automation ----------------------------------------------------
+playwright==1.55.0
+
+# --- Audio-service transport ----------------------------------------------
+python-socketio[asyncio_client]==5.13.0
+python-engineio==4.12.2
+websockets==15.0.1
+
+# --- Meeting-state persistence --------------------------------------------
+redis==5.2.1

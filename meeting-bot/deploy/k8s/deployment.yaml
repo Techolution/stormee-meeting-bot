@@ -1,0 +1,145 @@
+# Meeting bot deployment.
+#
+# The settings that are easy to get wrong, and expensive when you do:
+#
+#   terminationGracePeriodSeconds  30s (the default) truncates recordings
+#   /dev/shm volume                without it Chromium crashes mid-meeting
+#   readinessProbe on /ready       not /health — a busy pod is deliberately not ready
+#
+# See docs/OPERATIONS.md for the reasoning behind each.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meeting-bot
+  labels:
+    app.kubernetes.io/name: meeting-bot
+    app.kubernetes.io/component: meeting-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: meeting-bot
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never take a pod down until its replacement is ready: an evicted pod is a
+      # meeting that ends early.
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: meeting-bot
+    spec:
+      # The bot finalizes its recording on SIGTERM — flush, close the object,
+      # register the upload — then releases Chromium. Shutdown is bounded at 180s
+      # internally; a shorter grace period here means SIGKILL mid-flush and a
+      # lost recording.
+      terminationGracePeriodSeconds: 180
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+
+      containers:
+        - name: meeting-bot
+          image: meeting-bot:latest
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 5000
+
+          env:
+            - name: ENVIRONMENT
+              value: "prod"
+            - name: LOG_FORMAT
+              value: "json"
+            - name: BROWSER_HEADLESS
+              value: "true"
+            - name: BROWSER_PROFILE_DIR
+              value: "/data/chrome_profile"
+
+          envFrom:
+            - configMapRef:
+                name: meeting-bot-config
+            - secretRef:
+                name: meeting-bot-secrets
+
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              # An OOM kill bypasses graceful shutdown entirely and loses the
+              # recording. Prefer a generous limit to a tight one.
+              memory: "2Gi"
+              cpu: "2"
+
+          # Liveness: dependency-free, true whenever the event loop runs.
+          livenessProbe:
+            httpGet:
+              path: /api/meet/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness: 503 while a meeting is in progress, which is how a
+          # dispatcher avoids sending a second meeting to a busy pod.
+          readinessProbe:
+            httpGet:
+              path: /api/meet/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+
+          # Chromium and Playwright take a while to come up; without this, a slow
+          # start looks like a liveness failure and the pod restart-loops.
+          startupProbe:
+            httpGet:
+              path: /api/meet/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24 # up to two minutes
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false # Chromium writes to its profile and cache
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            # Chromium's shared-memory needs exceed the 64MB default. Without
+            # this it crashes partway through a meeting, usually once video
+            # tiles appear. This is the most common cause of a bot that joins
+            # and then dies.
+            - name: dshm
+              mountPath: /dev/shm
+
+            # Live Google session cookies. Mounted, never baked into the image.
+            - name: browser-profile
+              mountPath: /data/chrome_profile
+
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+
+        - name: browser-profile
+          secret:
+            secretName: meeting-bot-browser-profile
+            optional: true # absent: the bot joins as a guest and needs admission
+
+        - name: tmp
+          emptyDir: {}

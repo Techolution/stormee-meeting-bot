@@ -1,0 +1,234 @@
+"""Creative Workspace backend client.
+
+This is the boundary to CW, not a utility module. Everything the bot needs from
+CW is expressed here as a method with typed arguments and a typed result; no
+other package builds a CW URL or knows a CW payload shape.
+
+Responsibilities:
+  * Issue resumable-upload URLs for meeting recordings.
+  * Upload finished files directly (transcripts, converted audio).
+  * Confirm an upload so CW begins processing.
+  * Request meeting-mode artifact generation from an uploaded recording.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+from app.clients.base import BaseHTTPClient
+from app.core.config import CWUtilsSettings
+from app.core.exceptions import ExternalServiceError
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ResumableUploadTarget:
+    """Where a recording is uploaded and where it will be readable afterwards."""
+
+    upload_url: str
+    public_url: str
+
+    @property
+    def filename(self) -> str:
+        return self.public_url.rsplit("/", 1)[-1]
+
+
+@dataclass(frozen=True, slots=True)
+class UploadedFile:
+    """One file registered with CW."""
+
+    filename: str
+    url: str
+
+    def as_payload(self) -> dict[str, str]:
+        return {"filename": self.filename, "url": self.url}
+
+
+class CWUtilsClient(BaseHTTPClient):
+    """Client for the CW backend."""
+
+    service_name = "cw-utils"
+
+    _ENDPOINT_SIGNED_URLS = "/backend/gcs/generate-upload-signed-urls"
+    _ENDPOINT_UPLOAD_FILES = "/backend/gcs/upload-files/"
+    _ENDPOINT_CONFIRM_UPLOAD = "/backend/gcs/confirm-upload"
+    _ENDPOINT_MEETING_ARTIFACT = "/backend/meeting_mode_artifact/gen_mm_artifact_latest"
+
+    def __init__(self, settings: CWUtilsSettings) -> None:
+        super().__init__(
+            settings.base_url,
+            timeout_seconds=settings.timeout_seconds,
+            max_retries=settings.max_retries,
+        )
+        self._settings = settings
+
+    # ------------------------------------------------------------------
+    # Resumable uploads
+    # ------------------------------------------------------------------
+
+    async def create_resumable_upload(
+        self,
+        *,
+        project_id: str,
+        filename: str,
+        content_type: str,
+    ) -> ResumableUploadTarget:
+        """Reserve an object and return its resumable upload URL.
+
+        Called once per recording, when the first chunk arrives.
+
+        Raises:
+            ExternalServiceError: If CW declines or returns an unusable response.
+        """
+        payload = {
+            "project_id": project_id,
+            "filenames": [filename],
+            "resumable": True,
+            "content_type": content_type,
+        }
+
+        body = await self.post_json(
+            self._ENDPOINT_SIGNED_URLS,
+            operation="create_resumable_upload",
+            json=payload,
+        )
+
+        files = body.get("files") or []
+        if not files:
+            raise ExternalServiceError(
+                self.service_name,
+                "signed-url response contained no files",
+                details={"project_id": project_id, "filename": filename},
+            )
+
+        entry = files[0]
+        if entry.get("status") != "ready":
+            raise ExternalServiceError(
+                self.service_name,
+                f"signed URL not ready (status={entry.get('status')!r})",
+                details={"project_id": project_id, "filename": filename},
+            )
+
+        signed_url = entry.get("signed_url")
+        public_url = entry.get("public_url")
+        if not signed_url or not public_url:
+            raise ExternalServiceError(
+                self.service_name,
+                "signed-url response was missing signed_url or public_url",
+                details={"project_id": project_id, "filename": filename},
+            )
+
+        logger.info(
+            "Resumable upload target created",
+            extra={"project_id": project_id, "object_name": filename, "content_type": content_type},
+        )
+        return ResumableUploadTarget(upload_url=signed_url, public_url=public_url)
+
+    # ------------------------------------------------------------------
+    # Post-upload processing
+    # ------------------------------------------------------------------
+
+    async def confirm_upload(
+        self,
+        *,
+        project_id: str,
+        files: list[UploadedFile],
+        is_ai: bool = False,
+        user_name: str = "",
+        user_email: str = "",
+        auto_ingest: bool = True,
+    ) -> dict[str, Any]:
+        """Tell CW an upload is complete so it can begin processing.
+
+        Raises:
+            ValueError: If ``project_id`` or ``files`` is empty.
+            ExternalServiceError: If CW rejects the confirmation.
+        """
+        if not project_id or not files:
+            raise ValueError("project_id and at least one file are required to confirm an upload")
+
+        payload: dict[str, Any] = {
+            "project_id": project_id,
+            "files": [item.as_payload() for item in files],
+            "isAI": is_ai,
+            "auto_ingest": auto_ingest,
+        }
+        if user_name:
+            payload["artifactUserName"] = user_name
+        if user_email:
+            payload["artifactUserEmail"] = user_email
+
+        result = await self.post_json(
+            self._ENDPOINT_CONFIRM_UPLOAD,
+            operation="confirm_upload",
+            json=payload,
+            params={"auto_ingest": "true" if auto_ingest else "false"},
+        )
+
+        logger.info(
+            "Upload confirmed",
+            extra={
+                "project_id": project_id,
+                "file_count": len(files),
+                "auto_ingest": auto_ingest,
+            },
+        )
+        return result
+
+    async def generate_meeting_artifact(
+        self,
+        *,
+        audio_name: str,
+        project_id: str,
+        display_name: str,
+        user_email: str,
+        user_name: str,
+        model_type: str | None = None,
+        large_language_model: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Ask CW to derive a meeting artifact (summary, highlights) from a recording.
+
+        Raises:
+            ValueError: If any required identifier is missing.
+            ExternalServiceError: If CW rejects the request.
+        """
+        required = {
+            "audio_name": audio_name,
+            "project_id": project_id,
+            "display_name": display_name,
+            "user_email": user_email,
+            "user_name": user_name,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ValueError(f"missing required fields for artifact generation: {', '.join(missing)}")
+
+        payload = {
+            **required,
+            "model_type": model_type or self._settings.artifact_model_type,
+            "large_language_model": large_language_model or self._settings.artifact_llm,
+            "request_id": request_id or "",
+        }
+
+        result = await self.post_json(
+            self._ENDPOINT_MEETING_ARTIFACT,
+            operation="generate_meeting_artifact",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+
+        logger.info(
+            "Meeting artifact generation requested",
+            extra={"project_id": project_id, "audio_name": audio_name},
+        )
+        return result
+
+    def project_url(self, project_id: str) -> str:
+        """Deep link to a project in the CW UI."""
+        return self._settings.project_url_template.format(project_id=project_id)
+
+

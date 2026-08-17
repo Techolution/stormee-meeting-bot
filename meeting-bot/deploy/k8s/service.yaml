@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: meeting-bot
+  labels:
+    app.kubernetes.io/name: meeting-bot
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: meeting-bot
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+
+---
+# A headless service addressing pods individually.
+#
+# A meeting lives on one specific pod: only that pod can stop its recording or
+# report its status. Load-balancing those calls would send them to a pod that has
+# never heard of the meeting. A dispatcher resolves a pod through this service,
+# then addresses it directly for the meeting's lifetime.
+apiVersion: v1
+kind: Service
+metadata:
+  name: meeting-bot-headless
+  labels:
+    app.kubernetes.io/name: meeting-bot
+spec:
+  type: ClusterIP
+  clusterIP: None
+  # Pods are listed even while not ready, so a dispatcher can see a busy pod
+  # rather than concluding it has vanished.
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: meeting-bot
+  ports:
+    - name: http
+      port: 5000
+      targetPort: http

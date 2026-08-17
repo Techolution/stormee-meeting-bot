@@ -1,0 +1,45 @@
+# Keep the build context small and free of secrets. Anything sent to the daemon
+# can end up in an image layer, so credentials are excluded here as well as in
+# .gitignore.
+
+# Secrets and sessions
+.env
+.env.*
+!.env.example
+chrome_profile/
+auth.json
+
+# Version control and CI
+.git/
+.gitignore
+.github/
+
+# Local environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage*
+
+# Not needed at runtime
+tests/
+docs/
+deploy/
+scripts/
+Makefile
+*.md
+!README.md
+
+# Meeting artefacts
+*.webm
+*.mp3
+*.wav
+*.docx
+screenshots/
+recordings/
+logs/
+*.log
