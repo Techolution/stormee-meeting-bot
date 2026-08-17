@@ -177,3 +177,58 @@ def test_openapi_document_is_complete(client: TestClient) -> None:
         f"{PREFIX}/status",
     ):
         assert expected in paths, f"{expected} is not documented"
+
+
+# --------------------------------------------------------------------------
+# Log correlation
+#
+# The previous implementation pulled meetingId out of the request body so every
+# log line for a request named the meeting it concerned. Reading only path
+# parameters lost that for POST routes, which are most of them.
+# --------------------------------------------------------------------------
+
+
+def test_meeting_id_is_correlated_from_the_request_body(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("INFO"):
+        client.post(f"{PREFIX}/recordings/start", json={"meetingId": "from-body"})
+
+    tagged = [r for r in caplog.records if getattr(r, "meeting_id", "") == "from-body"]
+    assert tagged, "log records should carry the meeting id taken from the body"
+    assert any(r.name == "app.api.middleware" for r in tagged), (
+        "the request-completion line runs after the handler and must carry it too"
+    )
+
+
+def test_meeting_id_is_correlated_from_the_path(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("INFO"):
+        client.get(f"{PREFIX}/recordings/from-path/status")
+
+    assert any(getattr(r, "meeting_id", "") == "from-path" for r in caplog.records)
+
+
+def test_join_correlates_by_url_before_an_id_exists(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A malformed join has no usable id; the URL is the next best handle."""
+    with caplog.at_level("INFO"):
+        client.post(f"{PREFIX}/meetings/join", json={"meetingUrl": "https://meet.google.com/a-b-c"})
+
+    assert any(
+        "meet.google.com" in str(getattr(r, "meeting_id", "")) for r in caplog.records
+    )
+
+
+def test_requests_without_a_meeting_are_not_tagged(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An empty field would be noise on every line that has no meeting."""
+    with caplog.at_level("INFO"):
+        client.get(f"{PREFIX}/status")
+
+    completion = [r for r in caplog.records if r.name == "app.api.middleware"]
+    assert completion
+    assert all(not getattr(r, "meeting_id", "") for r in completion)

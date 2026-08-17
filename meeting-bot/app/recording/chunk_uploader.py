@@ -21,6 +21,7 @@ generation or email — that belongs to
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from abc import ABC, abstractmethod
@@ -262,6 +263,14 @@ class DirectChunkUploader(ChunkUploader):
         self._pending_bytes = bytearray()
         self._failed = False
 
+        # The page delivers chunks through an exposed callback, and Playwright
+        # dispatches each call as its own task — so `upload` runs concurrently.
+        # Everything it touches is order-dependent: reserving the object must
+        # happen once, and bytes must reach storage at strictly increasing
+        # offsets. Without this lock two chunks arriving together each reserve
+        # their own object and the recording is split across both.
+        self._lock = asyncio.Lock()
+
     async def start(self, context: RecordingContext) -> None:
         """Reserve the object and prepare sequencing."""
         self._context = context
@@ -316,25 +325,44 @@ class DirectChunkUploader(ChunkUploader):
         return True
 
     async def upload(self, chunk: AudioChunk) -> None:
-        """Sequence the chunk and upload any full blocks it completes."""
-        if self._failed or self._sequencer is None:
-            return
-        if not await self._ensure_target():
-            return
+        """Sequence the chunk and upload any full blocks it completes.
 
-        if not self._sequencer.accept(chunk):
-            return
+        Serialised: concurrent callers would otherwise reserve duplicate objects
+        and interleave their blocks, and the resumable protocol accepts bytes at
+        exactly one offset at a time.
+        """
+        async with self._lock:
+            if self._failed or self._sequencer is None:
+                return
+            if not await self._ensure_target():
+                return
 
-        for ready in self._sequencer.release_ready():
-            self._pending_bytes.extend(ready.data)
+            if not self._sequencer.accept(chunk):
+                return
 
-        await self._upload_full_blocks()
+            for ready in self._sequencer.release_ready():
+                self._pending_bytes.extend(ready.data)
+
+            await self._upload_full_blocks()
 
     async def _upload_full_blocks(self) -> None:
-        """Send every complete 256 KiB block currently buffered."""
+        """Send complete blocks, always holding at least one byte back.
+
+        The comparison is ``>`` rather than ``>=`` on purpose. Only the final
+        request may declare the object's total size, and a request that declares
+        it must carry data: a zero-length ``PUT`` with ``Content-Range:
+        bytes */TOTAL`` is a *status query* in the resumable protocol, which
+        answers 308 and leaves the object open rather than closing it.
+
+        Draining to exactly empty is therefore only safe if more data is coming,
+        and at finalize time none is. Retaining a byte guarantees the final block
+        is non-empty for any recording that captured anything at all — including
+        one whose length happens to be an exact multiple of the block size, which
+        is the case that used to fail.
+        """
         assert self._state is not None
 
-        while len(self._pending_bytes) >= self._block_size:
+        while len(self._pending_bytes) > self._block_size:
             block = bytes(self._pending_bytes[: self._block_size])
             try:
                 await self._storage.upload_block(
@@ -354,7 +382,16 @@ class DirectChunkUploader(ChunkUploader):
             self._stats.bytes_uploaded = self._state.uploaded_bytes
 
     async def finalize(self) -> UploadOutcome:
-        """Flush remaining bytes as the final block and close the object."""
+        """Flush remaining bytes as the final block and close the object.
+
+        Takes the same lock as :meth:`upload`: a chunk still in flight when the
+        recorder stops would otherwise append to the buffer after the final
+        block had been sent, and the object is closed by then.
+        """
+        async with self._lock:
+            return await self._finalize_locked()
+
+    async def _finalize_locked(self) -> UploadOutcome:
         if self._failed or self._state is None or self._sequencer is None:
             return UploadOutcome(
                 complete=False,
@@ -368,6 +405,16 @@ class DirectChunkUploader(ChunkUploader):
         await self._upload_full_blocks()
 
         meeting_id = self._context.meeting_id if self._context else ""
+
+        # Nothing was ever captured. There is no object to close, and a
+        # zero-length finalize would be a status query rather than a finalize.
+        if not self._pending_bytes and self._state.uploaded_bytes == 0:
+            logger.warning(
+                "Recording produced no audio; nothing to finalize",
+                extra={"meeting_id": meeting_id},
+            )
+            return UploadOutcome(complete=False, detail="no audio was captured")
+
         try:
             await self._storage.upload_block(
                 self._state,

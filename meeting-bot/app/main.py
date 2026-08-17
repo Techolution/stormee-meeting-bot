@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 if __package__ in (None, ""):
     # Running this file as a script puts `app/` on sys.path rather than the
@@ -34,9 +35,10 @@ if __package__ in (None, ""):
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.dependencies import correlate_meeting
 from app.api.errors import register_exception_handlers
 from app.api.middleware import RequestContextMiddleware
 from app.api.routes import api_router
@@ -94,7 +96,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     register_exception_handlers(app)
-    app.include_router(api_router, prefix=settings.app.api_prefix)
+    # Applied at the router so every route correlates its logs without each
+    # handler having to remember to.
+    app.include_router(
+        api_router,
+        prefix=settings.app.api_prefix,
+        dependencies=[Depends(correlate_meeting)],
+    )
 
     return app
 
@@ -143,6 +151,12 @@ def main() -> None:
         host=settings.app.host,
         port=settings.app.port,
         reload=not settings.app.is_production,
+        # Chromium rewrites its profile constantly while in a meeting — caches,
+        # cookies, session files. Watching that directory buries the application
+        # log under thousands of change notifications and burns CPU comparing
+        # trees, so the reloader is pointed at source only.
+        reload_dirs=[str(Path(__file__).resolve().parent)],
+        reload_excludes=["chrome_profile/*", "*.log", "screenshots/*"],
         log_config=None,  # logging is already configured by create_app
     )
 

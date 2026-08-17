@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import Any
 
 import socketio
@@ -224,4 +225,20 @@ class WebSocketClient:
         return _safe
 
     async def _dispose(self) -> None:
+        """Drop the client and close the HTTP session underneath it.
+
+        Dropping the reference alone leaks: python-socketio keeps an
+        ``aiohttp.ClientSession`` on its Engine.IO client, and a *failed*
+        connect leaves that session open with nothing to close it. Python then
+        reports "Unclosed client session" — one per attempt, so a retry loop
+        against an unreachable service leaks steadily for the life of the pod.
+        """
+        client = self._sio
         self._sio = None
+        if client is None:
+            return
+
+        session = getattr(getattr(client, "eio", None), "http", None)
+        if session is not None and not session.closed:
+            with suppress(Exception):
+                await session.close()

@@ -7,9 +7,12 @@ meeting titles and project names are user-supplied and reach an HTML document.
 
 from __future__ import annotations
 
+from datetime import date
 from html import escape
 
-_BRAND_FOOTER = "This is an automated notification. © Techolution"
+#: Matches the legacy footer. The year is derived rather than hardcoded so it
+#: does not silently go stale in January.
+_BRAND_FOOTER = f"This is an automated notification. © {date.today().year} Techolution"
 
 _MEETING_FILE_UPLOADED_HTML = """\
 <!DOCTYPE html>

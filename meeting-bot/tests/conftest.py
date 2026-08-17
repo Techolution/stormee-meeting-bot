@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+from pydantic_settings import BaseSettings
 
+import app.core.config as config_module
 from app.clients.cw_utils import ResumableUploadTarget
 from app.core.config import Settings
 from app.meeting_platform.base import ChunkSink, MeetingPlatform
@@ -30,12 +32,41 @@ from app.meeting_platform.models import (
 from app.recording.models import AudioChunk
 
 
+@pytest.fixture(autouse=True)
+def _ignore_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop every settings model from reading the developer's ``.env``.
+
+    ``Settings(_env_file=None)`` only disables the file for the *root* model;
+    each nested group is built by its own ``default_factory`` and reads the file
+    again. Pydantic copies the shared ``SettingsConfigDict`` into each class at
+    definition time, so the key has to be cleared on every model rather than on
+    the constant they were built from.
+
+    Autouse because a single test constructing a settings object without this is
+    enough to make the suite's result depend on local configuration — which is
+    how a green CI run and a red local run come to disagree.
+    """
+    for name in dir(config_module):
+        candidate = getattr(config_module, name)
+        if (
+            isinstance(candidate, type)
+            and issubclass(candidate, BaseSettings)
+            and candidate is not BaseSettings
+        ):
+            monkeypatch.setitem(candidate.model_config, "env_file", None)
+
+
 @pytest.fixture
 def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     """Settings built from a known environment, isolated from the developer's own.
 
-    Every ``MEETING_``/``REDIS_``/… variable is cleared so a local ``.env`` or
-    exported shell variable cannot change a test's outcome.
+    Two separate sources have to be shut out, and missing either makes the suite
+    depend on the machine it runs on:
+
+    * **Exported variables** — cleared below.
+    * **The ``.env`` file** — disabled by the autouse fixture. Clearing the
+      environment does not stop pydantic reading the file, and every nested
+      settings group reads it independently of the root object.
     """
     for prefix in (
         "APP_", "ENV", "ENVIRONMENT", "LOG_", "BROWSER_", "HEADLESS", "PROFILE_DIR",

@@ -116,3 +116,16 @@ def start_request(
             started_at=time.perf_counter(),
         )
     )
+
+
+def bind_meeting_id(meeting_id: str) -> None:
+    """Attach a meeting id to the current context, in place.
+
+    Unlike :func:`bind` this does not open a scope: it updates the context for
+    the remainder of the task, so a value discovered part-way through a request
+    (by parsing its body) still reaches log lines emitted after the handler
+    returns.
+    """
+    current = _context.get()
+    if meeting_id and meeting_id != current.meeting_id:
+        _context.set(replace(current, meeting_id=meeting_id))

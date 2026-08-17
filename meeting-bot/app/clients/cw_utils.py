@@ -13,10 +13,12 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import dataclass
-from typing import Any
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from app.clients.base import BaseHTTPClient
 from app.core.config import CWUtilsSettings
@@ -129,6 +131,61 @@ class CWUtilsClient(BaseHTTPClient):
         return ResumableUploadTarget(upload_url=signed_url, public_url=public_url)
 
     # ------------------------------------------------------------------
+    # Whole-file upload
+    # ------------------------------------------------------------------
+
+    async def upload_file(
+        self,
+        *,
+        file_path: Path,
+        project_id: str,
+        display_name: str | None = None,
+        is_ai: bool = True,
+    ) -> dict[str, Any]:
+        """Upload a complete local file in one request.
+
+        For artefacts small enough not to need the resumable protocol — an
+        exported transcript, a converted audio file. Recordings do not come
+        through here: they are streamed while the meeting runs, because holding
+        a whole meeting's audio in memory to upload at the end is what the
+        streaming pipeline exists to avoid.
+
+        The file is read in a worker thread. Reading it inline would block the
+        event loop, and this process is concurrently polling captions and
+        receiving audio chunks from the page — both of which stall if it does.
+
+        Raises:
+            FileNotFoundError: If the path does not exist or is not a file.
+            ExternalServiceError: If CW rejects the upload.
+        """
+        path = Path(file_path)
+        payload = await asyncio.to_thread(_read_file, path)
+
+        form: dict[str, Any] = {"project_id": project_id, "isAI": is_ai}
+        if display_name:
+            form["displayName"] = display_name
+
+        response = await self.request(
+            "PUT",
+            self._ENDPOINT_UPLOAD_FILES,
+            operation="upload_file",
+            data=form,
+            files={"files": (path.name, payload)},
+        )
+
+        result = response.json() if response.content else {}
+        logger.info(
+            "File uploaded",
+            extra={
+                "project_id": project_id,
+                "object_name": path.name,
+                "size_bytes": len(payload),
+                "uploaded_count": len(result.get("uploaded", [])),
+            },
+        )
+        return result
+
+    # ------------------------------------------------------------------
     # Post-upload processing
     # ------------------------------------------------------------------
 
@@ -233,3 +290,12 @@ class CWUtilsClient(BaseHTTPClient):
         return self._settings.project_url_template.format(project_id=project_id)
 
 
+def _read_file(path: Path) -> bytes:
+    """Read a file's bytes. Runs in a worker thread; see :meth:`CWUtilsClient.upload_file`.
+
+    Raises:
+        FileNotFoundError: If the path is missing or is not a regular file.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"not a readable file: {path}")
+    return path.read_bytes()

@@ -93,14 +93,24 @@ class ResumableUploadClient:
         if not data and not is_final:
             return
 
+        if not data:
+            # A zero-length PUT is a *status query* in this protocol, not a
+            # finalize: storage answers 308 and leaves the object open. Callers
+            # must retain at least one byte for the final block — see
+            # DirectChunkUploader._upload_full_blocks. Refusing here keeps the
+            # mistake loud instead of surfacing as a silently unfinished upload.
+            raise ChunkUploadError(
+                "cannot finalize with an empty block: a zero-length request queries "
+                "status rather than closing the object",
+                details={"meeting_id": meeting_id, "uploaded_bytes": state.uploaded_bytes},
+            )
+
         start = state.next_offset
         end = start + len(data) - 1
+        # Only the final request may declare the total; until then the size is
+        # unknown and every block must say so.
         total = str(start + len(data)) if is_final else "*"
-
-        # A final flush with no bytes still has to close the object.
-        content_range = (
-            f"bytes */{start}" if is_final and not data else f"bytes {start}-{end}/{total}"
-        )
+        content_range = f"bytes {start}-{end}/{total}"
 
         headers = {
             "Content-Type": state.content_type,
@@ -144,11 +154,20 @@ class ResumableUploadClient:
         # 308 on a final block means storage still expects more bytes — treat as
         # a failure so the caller does not report a truncated object as complete.
         body = response.text[:300] if response.content else ""
-        logger.error(
-            "Resumable upload rejected",
-            extra={**log_fields, "status": response.status_code, "body": body},
-        )
+
+        # On a 308, storage reports what it actually holds in `Range`. Comparing
+        # it with our offset is the difference between "we disagree about the
+        # byte count" and "the request was malformed", so it belongs in the log.
+        acknowledged = response.headers.get("Range", "")
+        failure = {
+            **log_fields,
+            "status": response.status_code,
+            "body": body,
+            "storage_ack_range": acknowledged or None,
+            "our_offset": state.uploaded_bytes,
+        }
+        logger.error("Resumable upload rejected", extra=failure)
         raise ChunkUploadError(
             f"object storage returned {response.status_code} for {content_range}",
-            details={**log_fields, "status": response.status_code, "body": body},
+            details=failure,
         )

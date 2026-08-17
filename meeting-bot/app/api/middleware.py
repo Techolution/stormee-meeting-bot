@@ -50,6 +50,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         finally:
             context = get_context()
             duration_ms = round(context.elapsed_ms, 1)
+            # Set by the correlate_meeting dependency once the body is parsed.
+            meeting_id = getattr(request.state, "meeting_id", "") or context.meeting_id
             reset_context(token)
 
         response.headers[REQUEST_ID_HEADER] = request_id
@@ -63,6 +65,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                     "status": response.status_code,
                     "duration_ms": duration_ms,
                     "request_id": request_id,
+                    **({"meeting_id": meeting_id} if meeting_id else {}),
                 },
             )
 

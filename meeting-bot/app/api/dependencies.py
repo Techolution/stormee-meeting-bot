@@ -16,8 +16,43 @@ from fastapi import Depends, Request
 
 from app.core.config import Settings
 from app.core.exceptions import ConfigurationError
+from app.core.request_context import bind_meeting_id
 from app.meeting.meeting_manager import MeetingManager
 from app.repositories.base import MeetingStateRepository
+
+
+async def correlate_meeting(request: Request) -> None:
+    """Attach the request's meeting id to the logging context.
+
+    Applied to every route, so each log line produced while handling a request
+    carries the meeting it concerns — including the middleware's completion
+    line, which runs after the handler.
+
+    The id lives in the path for some routes and in the body for others. Reading
+    the body here is safe: FastAPI caches it on the request, so the handler's own
+    model parsing still sees it. Doing the same thing in middleware would consume
+    the stream before the handler could read it.
+    """
+    meeting_id = str(request.path_params.get("meeting_id") or "")
+
+    if not meeting_id and request.method in {"POST", "PUT", "PATCH"}:
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001 - a malformed body is the handler's problem to report
+            return
+        if isinstance(payload, dict):
+            # meetingUrl is the fallback the previous implementation used, for
+            # the join request that names the meeting before it has an id.
+            meeting_id = str(
+                payload.get("meetingId") or payload.get("meeting_id") or payload.get("meetingUrl") or ""
+            )
+
+    if meeting_id:
+        bind_meeting_id(meeting_id)
+        # Also stashed on the ASGI scope: Starlette runs the handler in a
+        # separate context, so a contextvar set here never reaches the
+        # middleware that logs the request's completion.
+        request.state.meeting_id = meeting_id
 
 
 def get_settings_dep(request: Request) -> Settings:

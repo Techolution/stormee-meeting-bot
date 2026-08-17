@@ -111,3 +111,25 @@ def test_memory_limit_is_exposed_in_bytes(monkeypatch: pytest.MonkeyPatch) -> No
     settings = _settings(monkeypatch, AUDIO_QUEUE_MAX_MEMORY_MB="20")
 
     assert settings.recording.queue_max_memory_bytes == 20 * 1024 * 1024
+
+
+def test_env_file_is_found_regardless_of_working_directory(
+    tmp_path: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`.env` is anchored to the project root, not the working directory.
+
+    Running `python main.py` from inside `app/` used to resolve `.env` against
+    that directory, find nothing, and start on defaults — which presents as
+    "my configuration is being ignored" rather than as an error.
+    """
+    from app.core import config as config_module
+
+    root_env = config_module._PROJECT_ROOT / ".env"
+    assert config_module._ENV_FILES[0] == root_env, "root .env must be consulted first"
+    assert root_env.is_absolute(), "an absolute path is what makes cwd irrelevant"
+
+
+def test_project_root_points_at_the_package_parent() -> None:
+    from app.core import config as config_module
+
+    assert (config_module._PROJECT_ROOT / "app" / "core" / "config.py").is_file()

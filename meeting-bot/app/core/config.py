@@ -25,8 +25,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["local", "dev", "qa", "prod"]
 
+#: Project root — the directory holding the `app` package.
+#: config.py -> app/core -> app -> project root
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+#: Where `.env` is looked for.
+#:
+#: Anchored to the project root rather than left relative, because a relative
+#: path resolves against the *current working directory*: running
+#: `python main.py` from inside `app/` would silently find no `.env` and start
+#: with defaults, which reads as "my configuration is being ignored".
+#:
+#: The working directory is still consulted second, so a deliberately placed
+#: local `.env` wins. In the usual case both resolve to the same file.
+_ENV_FILES = (_PROJECT_ROOT / ".env", Path(".env"))
+
 _ENV_FILE = SettingsConfigDict(
-    env_file=".env",
+    env_file=_ENV_FILES,
     env_file_encoding="utf-8",
     case_sensitive=False,
     extra="ignore",
@@ -138,6 +153,21 @@ class BrowserSettings(BaseSettings):
         validation_alias=AliasChoices("BROWSER_SCREENSHOT_DIR"),
         description="When set, join failures are captured here for debugging.",
     )
+
+    @field_validator("profile_dir", "screenshot_dir")
+    @classmethod
+    def _anchor_to_project_root(cls, value: Path | None) -> Path | None:
+        """Resolve a relative path against the project root, not the process cwd.
+
+        Whether the profile directory exists decides how the bot joins: present
+        means signed in, absent means guest. Leaving the path relative made that
+        depend on where the process happened to be started, so running from
+        ``app/`` silently produced a guest join with only a log line to say so.
+        An absolute path is left exactly as given.
+        """
+        if value is None or value.is_absolute():
+            return value
+        return _PROJECT_ROOT / value
 
 
 class MeetingSettings(BaseSettings):

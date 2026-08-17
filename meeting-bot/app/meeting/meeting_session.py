@@ -203,10 +203,16 @@ class MeetingSession:
             ),
             # From here on nothing is essential to being in the meeting, so a
             # failure degrades the session rather than ending it.
+            #
+            # Monitors come first deliberately. Reaching the audio service can
+            # take the full retry budget — half a minute against an unreachable
+            # one — and the bot is already sitting in the meeting by then. Doing
+            # it the other way round left the meeting unwatched for that whole
+            # window: no participant count, no chat commands, no heartbeat.
+            LifecycleStep("start_monitors", self._start_monitors, critical=False, timeout_seconds=30.0),
             LifecycleStep(
                 "connect_audio_service", self._connect_audio_service, critical=False, timeout_seconds=60.0
             ),
-            LifecycleStep("start_monitors", self._start_monitors, critical=False, timeout_seconds=30.0),
         ]
 
     async def _launch_browser(self) -> None:
