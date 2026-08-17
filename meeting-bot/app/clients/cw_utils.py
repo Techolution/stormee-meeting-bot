@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any
+import uuid
 
 from app.clients.base import BaseHTTPClient
 from app.core.config import CWUtilsSettings
@@ -55,7 +56,7 @@ class CWUtilsClient(BaseHTTPClient):
     _ENDPOINT_SIGNED_URLS = "/backend/gcs/generate-upload-signed-urls"
     _ENDPOINT_UPLOAD_FILES = "/backend/gcs/upload-files/"
     _ENDPOINT_CONFIRM_UPLOAD = "/backend/gcs/confirm-upload"
-    _ENDPOINT_MEETING_ARTIFACT = "/backend/meeting_mode_artifact/gen_mm_artifact_latest"
+    _ENDPOINT_MEETING_ARTIFACT = "/backend/meeting_mode_artifact/gen_mm_artifact_bg"
 
     def __init__(self, settings: CWUtilsSettings) -> None:
         super().__init__(
@@ -211,7 +212,7 @@ class CWUtilsClient(BaseHTTPClient):
             **required,
             "model_type": model_type or self._settings.artifact_model_type,
             "large_language_model": large_language_model or self._settings.artifact_llm,
-            "request_id": request_id or "",
+            "request_id": request_id or str(uuid.uuid4()),
         }
 
         result = await self.post_json(
@@ -222,7 +223,7 @@ class CWUtilsClient(BaseHTTPClient):
         )
 
         logger.info(
-            "Meeting artifact generation requested",
+            f"Meeting artifact generation requested request_id :{request_id}",
             extra={"project_id": project_id, "audio_name": audio_name},
         )
         return result
