@@ -52,12 +52,18 @@ class BrowserOptions:
     launch_args: tuple[str, ...] = field(
         default=(
             "--disable-blink-features=AutomationControlled",
-            "--start-maximized",
+            # "--start-maximized",
             "--use-fake-device-for-media-stream",
             "--use-fake-ui-for-media-stream",
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--disable-component-update",
+            "--disable-features=Translate,BackForwardCache",
         )
     )
 
