@@ -45,6 +45,39 @@ spec:
         runAsUser: 10001
         fsGroup: 10001
 
+      initContainers:
+        - name: chrome-profile-downloader
+          image: google-cloud-cli:latest
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Downloading Chrome profile from GCS..."
+              gsutil -m cp gs://${GCS_BUCKET}/${GCS_OBJECT_PATH} /tmp/chrome_profile.tar.gz
+              echo "Extracting Chrome profile..."
+              tar -xzf /tmp/chrome_profile.tar.gz -C /chrome-profile/
+              echo "Chrome profile initialization complete"
+          env:
+            - name: GCS_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: meeting-bot-config
+                  key: GCS_BUCKET
+            - name: GCS_OBJECT_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: meeting-bot-config
+                  key: GCS_OBJECT_PATH
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: chrome-profile-volume
+              mountPath: /chrome-profile
+
       containers:
         - name: meeting-bot
           image: meeting-bot:latest
@@ -62,7 +95,7 @@ spec:
             - name: BROWSER_HEADLESS
               value: "true"
             - name: BROWSER_PROFILE_DIR
-              value: "/data/chrome_profile"
+              value: "/chrome-profile"
 
           envFrom:
             - configMapRef:
@@ -123,9 +156,9 @@ spec:
             - name: dshm
               mountPath: /dev/shm
 
-            # Live Google session cookies. Mounted, never baked into the image.
-            - name: browser-profile
-              mountPath: /data/chrome_profile
+            # Chrome profile downloaded from GCS by init container.
+            - name: chrome-profile-volume
+              mountPath: /chrome-profile
 
             - name: tmp
               mountPath: /tmp
@@ -136,10 +169,8 @@ spec:
             medium: Memory
             sizeLimit: 1Gi
 
-        - name: browser-profile
-          secret:
-            secretName: meeting-bot-browser-profile
-            optional: true # absent: the bot joins as a guest and needs admission
+        - name: chrome-profile-volume
+          emptyDir: {}
 
         - name: tmp
           emptyDir: {}

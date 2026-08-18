@@ -20,7 +20,7 @@ data:
   # --- Audio service --------------------------------------------------------
   # Empty means this pod performs the resumable upload itself.
   WEBSOCKET_URL: "http://audio-service.default.svc.cluster.local:5000"
-  RECORDING_UPLOAD_TRANSPORT: "websocket"
+  RECORDING_UPLOAD_TRANSPORT: "direct"
 
   # --- Meeting-state persistence -------------------------------------------
   # Optional. Losing Redis loses history, not correctness.
@@ -54,3 +54,10 @@ data:
   # --- HTTP -----------------------------------------------------------------
   # Narrow this to the dispatcher's origin in production.
   CORS_ORIGINS: "*"
+
+  # --- Chrome Profile via GCS ---------------------------------------------------
+  # GCS bucket and object path for Chrome profile initialization.
+  # The init container downloads and extracts the profile from GCS before the
+  # main container starts, using Workload Identity for authentication.
+  GCS_BUCKET: "" # Set to your GCS bucket name, e.g. "my-org-chrome-profiles"
+  GCS_OBJECT_PATH: "" # Set to object path, e.g. "profiles/chrome-profile.tar.gz"

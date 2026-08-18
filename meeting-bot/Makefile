@@ -105,6 +105,23 @@ docker-run: docker-build ## Run the image with .env and a persisted browser prof
 docker-shell: ## Open a shell in the image
 	docker run --rm -it --entrypoint bash $(IMAGE):$(TAG)
 
+CPU_LIMIT    ?= 0.4
+MEMORY_LIMIT ?= 1g
+
+.PHONY: docker-run-low
+docker-run-low: docker-build ## Run with low CPU and memory limits
+	docker rm -f $(CONTAINER) 2>/dev/null || true
+	docker run --rm -it \
+		--name $(CONTAINER) \
+		--ipc=host \
+		--cpus=$(CPU_LIMIT) \
+		--memory=$(MEMORY_LIMIT) \
+		--memory-swap=$(MEMORY_LIMIT) \
+		-p $${APP_PORT:-5000}:5000 \
+		--env-file .env \
+		-v "$(PWD)/chrome_profile:/data/chrome_profile" \
+		$(IMAGE):$(TAG)
+
 # --------------------------------------------------------------------------
 # Utilities
 # --------------------------------------------------------------------------
