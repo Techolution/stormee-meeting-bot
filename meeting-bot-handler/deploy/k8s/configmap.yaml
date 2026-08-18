@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meeting-bot-handler
+data:
+  KUBERNETES_NAMESPACE: meeting-bots
+  BOT_IMAGE: meeting-bot:latest

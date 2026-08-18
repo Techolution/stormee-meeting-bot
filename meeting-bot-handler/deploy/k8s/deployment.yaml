@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meeting-bot-handler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: meeting-bot-handler
+  template:
+    metadata:
+      labels:
+        app: meeting-bot-handler
+    spec:
+      serviceAccountName: meeting-bot-handler
+      containers:
+        - name: meeting-bot-handler
+          image: meeting-bot-handler:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: KUBERNETES_NAMESPACE
+              value: meeting-bots
