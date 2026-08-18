@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 
 from app.browser.browser import Browser
@@ -51,6 +52,35 @@ logger = logging.getLogger(__name__)
 
 #: Name of the page callback the recorder pushes chunks into.
 _CHUNK_CALLBACK = "sendAudioChunkToPython"
+
+_MERGED_AUDIO_HEADER = re.compile(
+    r"^(?P<name>.+?)\s*&\s*(?P<count>\d+)\s+others?\b\s*(?P<speech>.*)$",
+    re.IGNORECASE,
+)
+
+
+def _normalise_merged_audio_blocks(blocks: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Expose only the primary name from Meet's merged-audio caption header."""
+    normalised: list[dict[str, str]] = []
+    for block in blocks:
+        match = (
+            _MERGED_AUDIO_HEADER.match(block.get("text", "").strip())
+            if block.get("speaker", "").strip().casefold() == "groups"
+            else None
+        )
+        if not match:
+            normalised.append(block)
+            continue
+
+        normalised.append(
+            {
+                **block,
+                "speaker": match.group("name").strip(),
+                "text": match.group("speech").strip(),
+            }
+        )
+
+    return normalised
 
 #: Meet redirects here when a meeting forbids anonymous participants.
 _GOOGLE_SIGN_IN_HOST = "accounts.google.com"
@@ -278,6 +308,7 @@ class GoogleMeetPlatform(MeetingPlatform):
             default=[],
         )
 
+        blocks = _normalise_merged_audio_blocks(blocks or [])
         captured_at = datetime.now(timezone.utc)
         return [
             CaptionLine(
@@ -285,7 +316,7 @@ class GoogleMeetPlatform(MeetingPlatform):
                 text=block.get("text", "").strip(),
                 captured_at=captured_at,
             )
-            for block in blocks or []
+            for block in blocks
             if block.get("text", "").strip()
         ]
 

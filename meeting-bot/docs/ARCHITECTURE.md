@@ -311,19 +311,12 @@ platform.get_captions()  ──► CaptionAggregator ──► TranscriptSegment
                                                          └─► audio service
 ```
 
-The aggregator merges each new reading into the text it already has:
+The aggregator mirrors the legacy bot: every poll replaces the previous live
+buffer, and stopping returns only the latest visible ordered rows.
 
-| Case | Meaning | Action |
-|---|---|---|
-| `extension` | new text extends old | take the new text |
-| `redraw` | new is a prefix of old | keep the longer |
-| `scroll` | Meet dropped the head; tails overlap | splice on the overlap |
-| no overlap | a new utterance began | emit the old one |
-
-Both naive readings fail: appending every snapshot repeats each sentence once
-per poll, and keeping only the newest — which the previous implementation did —
-yields a transcript containing the last few seconds of the meeting and nothing
-else.
+Adjacent rows with exactly identical text are deduplicated at stop time. This
+prevents growing partial captions from accumulating across polls. Captions that
+already scrolled away are intentionally not retained.
 
 ### Shutdown
 
