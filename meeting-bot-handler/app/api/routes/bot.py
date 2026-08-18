@@ -9,9 +9,11 @@ These endpoints allow clients to control the lifecycle of bot meetings:
 """
 
 from __future__ import annotations
+import uuid
 
 from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel, Field
+from app.domain.models import BotSession, MeetingStatus, BotStatus
 
 from app.bootstrap import create_bot_handler
 from app.application.bot_handler import BotHandler
@@ -39,6 +41,28 @@ class SessionStatusResponse(BaseModel):
     """Response for session status."""
     session_id: str
     status: dict
+
+
+# Create session request/response
+class CreateSessionRequest(BaseModel):
+    meeting_id: str = Field(..., min_length=1)
+    meeting_url: str = Field(..., description="Google Meet URL")
+    scheduled_at: str | None = None
+    bot_service_url: str | None = Field(default=None, description="Target worker pod URL")
+    
+    # User and Project Context for Meeting Bot
+    user_name: str | None = Field(default=None, description="Display name for the bot")
+    user_email: str | None = Field(default=None, description="Recipient for ready notifications")
+    project_id: str | None = Field(default=None, description="Determines where recording is filed")
+    project_name: str | None = Field(default=None, description="Used in email notifications")
+    meeting_title: str | None = Field(default=None, description="Display name for the artifact")
+
+
+class CreateSessionResponse(BaseModel):
+    session_id: str
+    meeting_id: str
+    status: str
+    created_at: str | None = None
 
 
 def get_bot_handler() -> BotHandler:
@@ -71,6 +95,58 @@ async def start_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start session: {str(e)}",
         )
+
+
+@router.post(
+    "",
+    response_model=CreateSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a bot session",
+)
+async def create_session(
+    request: CreateSessionRequest,
+    handler: BotHandler = Depends(get_bot_handler),
+) -> CreateSessionResponse:
+    if handler._session_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Session service not configured",
+        )
+
+    session_id = uuid.uuid4().hex
+
+    # Initialize BotSession using explicit status fields
+    session = BotSession(
+        session_id=session_id,
+        meeting_id=request.meeting_id,
+        meeting_url=request.meeting_url,
+        service_url=request.bot_service_url,
+        user_name=request.user_name,
+        user_email=request.user_email,
+        project_id=request.project_id,
+        project_name=request.project_name,
+        meeting_title=request.meeting_title,
+        meeting_status=MeetingStatus.CREATED,
+        bot_status=BotStatus.PENDING,
+    )
+
+    created = await handler._session_service.create_session(session)
+    # TODO spinup the kubernates job
+    # TODO poll for job service startup status
+    # TODO hit meeting join api  
+    # Safely get status string
+    status_val = (
+        created.bot_status.value
+        if hasattr(created.bot_status, "value")
+        else str(created.bot_status)
+    )
+
+    return CreateSessionResponse(
+        session_id=created.session_id,
+        meeting_id=created.meeting_id,
+        status=status_val,
+        created_at=created.created_at.isoformat() if getattr(created, "created_at", None) else None,
+    )
 
 
 @router.post(
@@ -259,3 +335,28 @@ async def get_session_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get session status: {str(e)}",
         )
+
+
+@router.get(
+    "/{session_id}",
+    response_model=CreateSessionResponse,
+    summary="Get session record",
+)
+async def get_session(
+    session_id: str,
+    handler: BotHandler = Depends(get_bot_handler),
+) -> CreateSessionResponse:
+    """Return the persisted session record (durable state)."""
+    if handler._session_service is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Session service not configured")
+
+    session = await handler._session_service.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
+
+    return CreateSessionResponse(
+        session_id=session.session_id,
+        meeting_id=session.meeting_id,
+        status=session.status.value,
+        created_at=session.created_at.isoformat() if session.created_at else None,
+    )

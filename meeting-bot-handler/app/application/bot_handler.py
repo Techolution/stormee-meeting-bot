@@ -1,261 +1,185 @@
-"""
-Main application orchestrator for Bot sessions.
-
-This module handles **workflow orchestration and business logic only**.
-
-It must not contain:
-- HTTP endpoint knowledge (URLs, methods, payloads)
-- httpx or HTTP client code
-- Playwright logic
-- Google Meet implementation
-- recording implementation details
-- transcription implementation details
-- WebSocket implementation
-- direct Kubernetes API details
-
-All HTTP communication is delegated to BotClient.
-"""
-
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timezone
+import logging
+from typing import Any, Dict, Optional
+import uuid
+import httpx
 
 from app.application.bot_client import BotClient
+from app.application.bot_service_resolver import BotServiceResolver
+from app.application.session_service import SessionService
+from app.domain.enums import BotSessionStatus, RecordingStatus, TranscriptionStatus
+from app.domain.models import MeetingRecording
+from app.domain.exceptions import (
+    InvalidSessionStateError,
+    SessionNotFoundError,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class BotHandler:
-    """Orchestrates the lifecycle of one Bot session.
-    
-    This class manages the business logic and workflow of bot sessions.
-    It delegates all HTTP communication to BotClient.
-    
-    Responsibilities:
-    - Session lifecycle management
-    - Validation of operations
-    - Calling BotClient for actual HTTP communication
-    - Processing results from BotClient
-    - State management (future: event tracking, DB updates, etc.)
-    """
+    """Control plane application orchestrator."""
 
-    def __init__(self, bot_client: BotClient | None = None):
-        """Initialize the BotHandler with a BotClient.
-        
-        Args:
-            bot_client: Optional BotClient instance. If not provided, creates a new one.
-        """
-        if bot_client is None:
-            bot_client = BotClient()
-        self.bot_client = bot_client
+    def __init__(
+        self,
+        session_service: SessionService,
+        bot_resolver: BotServiceResolver,
+        http_client: Optional[httpx.AsyncClient] = None,
+    ):
+        self._session_service = session_service
+        self.bot_resolver = bot_resolver
+        self.http_client = http_client or httpx.AsyncClient(timeout=30.0)
 
-    async def start_bot(self, session_id: str) -> dict[str, Any]:
-        """Orchestrate joining a meeting.
-        
-        Business logic:
-        1. Validate session_id
-        2. Call BotClient to join meeting
-        3. Process result
-        
-        Args:
-            session_id: The meeting_id to join.
-            
-        Returns:
-            The result from the bot service.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        # TODO: Add validation logic here
-        # TODO: Add state tracking (e.g., record session in DB)
-        
-        result = await self.bot_client.join_meeting(session_id)
-        
-        # TODO: Process result, update state, emit events, etc.
-        
-        return result
+    def _get_client(self, session: Any) -> BotClient:
+        target = self.bot_resolver.resolve(session)
+        return BotClient(service_url=target.service_url, http_client=self.http_client)
 
-    async def start_recording(self, session_id: str) -> dict[str, Any]:
-        """Orchestrate starting recording for a session.
-        
-        Business logic:
-        1. Validate session exists
-        2. Call BotClient to start recording
-        3. Process result and update state
-        
-        Args:
-            session_id: The meeting_id to start recording for.
-            
-        Returns:
-            The result from the bot service.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        # TODO: Validate that session is in correct state
-        # TODO: Track recording state
-        
-        result = await self.bot_client.start_recording(session_id)
-        
-        # TODO: Update application state, emit events, etc.
-        
-        return result
+    async def start_bot(self, session_id: str) -> Dict[str, Any]:
+        session = await self._session_service.get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' does not exist.")
 
-    async def stop_recording(self, session_id: str) -> dict[str, Any]:
-        """Orchestrate stopping recording for a session.
+        client = self._get_client(session)
         
-        Business logic:
-        1. Validate session is recording
-        2. Call BotClient to stop recording
-        3. Process result and update state
-        
-        Args:
-            session_id: The meeting_id to stop recording for.
-            
-        Returns:
-            The result from the bot service.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        # TODO: Validate that recording is in progress
-        # TODO: Track stop result
-        
-        result = await self.bot_client.stop_recording(session_id)
-        
-        # TODO: Update application state, emit events, etc.
-        
-        return result
+        # Mark session as starting
+        session.status = BotSessionStatus.STARTING
+        await self._session_service.update_session(session)
 
-    async def start_transcription(self, session_id: str) -> dict[str, Any]:
-        """Orchestrate starting transcription for a session.
-        
-        Business logic:
-        1. Validate session exists
-        2. Call BotClient to start transcription
-        3. Process result and update state
-        
-        Args:
-            session_id: The meeting_id to start transcription for.
-            
-        Returns:
-            The result from the bot service.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        # TODO: Validate that session is in correct state
-        # TODO: Track transcription state
-        
-        result = await self.bot_client.start_transcription(session_id)
-        
-        # TODO: Update application state, emit events, etc.
-        
-        return result
+        # Send join request (Worker returns HTTP 202 Accepted)
+        res = await client.join_meeting(
+            meeting_id=session.meeting_id,
+            meeting_url=session.meeting_url,
+            user_name=getattr(session, "user_name", None),
+            user_email=getattr(session, "user_email", None),
+            project_id=getattr(session, "project_id", None),
+            project_name=getattr(session, "project_name", None),
+            meeting_title=getattr(session, "meeting_title", None),
+        )
 
-    async def stop_transcription(self, session_id: str) -> dict[str, Any]:
-        """Orchestrate stopping transcription for a session.
-        
-        Business logic:
-        1. Validate session is transcribing
-        2. Call BotClient to stop transcription
-        3. Process result and update state
-        
-        Args:
-            session_id: The meeting_id to stop transcription for.
-            
-        Returns:
-            The result from the bot service.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        # TODO: Validate that transcription is in progress
-        # TODO: Track stop result
-        
-        result = await self.bot_client.stop_transcription(session_id)
-        
-        # TODO: Update application state, emit events, etc.
-        
-        return result
+        return {"status": "STARTING", "session_id": session_id, "result": res}
 
-    async def leave(self, session_id: str) -> dict[str, Any]:
-        """Orchestrate leaving a meeting session.
-        
-        Business logic:
-        1. Validate session exists
-        2. Ensure recording/transcription are stopped first (future)
-        3. Call BotClient to leave meeting
-        4. Clean up session state
-        
-        Args:
-            session_id: The meeting_id to leave.
-            
-        Returns:
-            The result from the bot service.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        # TODO: Validate session is in correct state
-        # TODO: Ensure clean shutdown of recording/transcription
-        
-        result = await self.bot_client.leave_meeting(session_id)
-        
-        # TODO: Clean up session state, remove from tracking, emit events, etc.
-        
-        return result
+    async def start_recording(self, session_id: str) -> Dict[str, Any]:
+        session = await self._session_service.get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' does not exist.")
 
-    async def stop(self, session_id: str) -> dict[str, Any]:
-        """Stop the session (orchestrated leave operation).
-        
-        Business logic:
-        - This is equivalent to leave() in the current implementation.
-        - In the future, may include additional cleanup logic specific to 'stop'.
-        
-        Note: No direct 'stop' endpoint exists in meeting-bot, so we use leave as the closest equivalent.
-        
-        Args:
-            session_id: The meeting_id to stop.
-            
-        Returns:
-            The result from the bot service.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        # TODO: Add stop-specific logic if needed
-        result = await self.bot_client.leave_meeting(session_id)
-        return result
+        client = self._get_client(session)
 
-    async def get_status(self, session_id: str) -> dict[str, Any]:
-        """Orchestrate retrieving session status.
+        # 1. Dispatch start command to worker pod
+        res = await client.start_recording(session.meeting_id)
+
+        # 2. Track new entry in meeting_recordings table
+        recording = MeetingRecording(
+            recording_id=uuid.uuid4().hex,
+            session_id=session.session_id,
+            meeting_id=session.meeting_id,
+            status=RecordingStatus.RECORDING,
+            started_at=datetime.now(timezone.utc),
+        )
+        await self._session_service.create_recording(recording)
+
+        # 3. Update top-level session active recording status
+        session.active_recording_status = RecordingStatus.RECORDING
+        await self._session_service.update_session(session)
+
+        return {"status": "RECORDING", "recording_id": recording.recording_id, "detail": res}
+
+
+    async def stop_recording(self, session_id: str) -> Dict[str, Any]:
+        session = await self._session_service.get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' does not exist.")
+
+        client = self._get_client(session)
+
+        # 1. Dispatch stop command to worker pod
+        res = await client.stop_recording(session.meeting_id)
+
+        # 2. Get active recording take and update status/metrics
+        active_rec = await self._session_service.get_active_recording(session_id)
+        if active_rec:
+            # Reconcile final stats from GET /recordings/{meetingId}/status
+            rec_status = await client.get_recording_status(session.meeting_id)
+            active_rec.status = RecordingStatus.STOPPED
+            active_rec.stopped_at = datetime.now(timezone.utc)
+            active_rec.chunks_uploaded = rec_status.get("chunksUploaded", 0)
+            active_rec.bytes_uploaded = rec_status.get("bytesUploaded", 0)
+            await self._session_service.update_recording(active_rec)
+
+        # 3. Update top-level session
+        session.active_recording_status = RecordingStatus.STOPPED
+        await self._session_service.update_session(session)
+
+        return {"status": "STOPPED", "session_id": session_id, "detail": res}
+
+    async def start_transcription(self, session_id: str) -> Dict[str, Any]:
+        session = await self._session_service.get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' does not exist.")
+
+        client = self._get_client(session)
         
-        Business logic:
-        1. Retrieve status from BotClient
-        2. Optionally enrich with application state (future)
+        res = await client.start_transcription(session.meeting_id)
         
-        Args:
-            session_id: The meeting_id to get status for.
+        session.transcription_status = TranscriptionStatus.RUNNING
+        await self._session_service.update_session(session)
+        return res
+
+    async def stop_transcription(self, session_id: str) -> Dict[str, Any]:
+        session = await self._session_service.get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' does not exist.")
+
+        client = self._get_client(session)
+        
+        res = await client.stop_transcription(session.meeting_id)
+        
+        session.transcription_status = TranscriptionStatus.COMPLETED
+        await self._session_service.update_session(session)
+        return res
+
+    async def leave(self, session_id: str) -> Dict[str, Any]:
+        session = await self._session_service.get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' does not exist.")
+
+        client = self._get_client(session)
+        
+        session.status = BotSessionStatus.LEAVING
+        await self._session_service.update_session(session)
+
+        res = await client.leave_meeting(session.meeting_id)
+
+        session.status = BotSessionStatus.COMPLETED
+        await self._session_service.update_session(session)
+        return res
+
+    async def stop(self, session_id: str) -> Dict[str, Any]:
+        return await self.leave(session_id)
+
+    async def get_status(self, session_id: str) -> Dict[str, Any]:
+        session = await self._session_service.get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' does not exist.")
+
+        # Reconcile runtime worker status with DB
+        try:
+            client = self._get_client(session)
+            runtime_status = await client.get_meeting_status(session.meeting_id)
             
-        Returns:
-            The status response including bot service status and application state.
-            
-        Raises:
-            httpx.HTTPStatusError: If the bot service returns an error.
-        """
-        result = await self.bot_client.get_meeting_status(session_id)
-        
-        # TODO: Enrich with application state, timestamps, computed values, etc.
-        
-        return result
+            # Map session_state from worker to DB status if active
+            if runtime_status.get("session_state") == "in_meeting":
+                session.status = BotSessionStatus.RUNNING
+                await self._session_service.update_session(session)
+        except Exception as e:
+            logger.warning(f"Could not reach bot worker for status reconciliation: {e}")
+            runtime_status = None
 
-    async def close(self) -> None:
-        """Close the bot client connection."""
-        await self.bot_client.close()
-
-    async def __aenter__(self):
-        """Context manager entry."""
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit, closing the bot client."""
-        await self.close()
+        return {
+            "session_id": session.session_id,
+            "meeting_id": session.meeting_id,
+            "status": session.status.value if hasattr(session.status, "value") else str(session.status),
+            "runtime": runtime_status,
+        }
