@@ -202,9 +202,23 @@ class MeetingManager:
     # Recording
     # ------------------------------------------------------------------
 
-    async def start_recording(self, meeting_id: str) -> None:
-        """Begin recording a meeting's audio."""
-        await self._sessions.require(meeting_id).start_recording()
+    async def start_recording(
+        self,
+        meeting_id: str,
+        max_duration_seconds: int | None = None,
+        generate_incremental_highlights: bool = False,
+    ) -> None:
+        """Begin recording a meeting's audio.
+
+        Args:
+            meeting_id: The meeting identifier.
+            max_duration_seconds: Optional maximum duration before auto-uploading this segment.
+            generate_incremental_highlights: Whether to request highlights for segments.
+        """
+        await self._sessions.require(meeting_id).start_recording(
+            max_duration_seconds=max_duration_seconds,
+            generate_incremental_highlights=generate_incremental_highlights,
+        )
 
     async def stop_recording(self, meeting_id: str) -> None:
         """Stop recording and finalize the upload."""

@@ -63,6 +63,18 @@ class ChunkUploader(ABC):
     def pending_count(self) -> int:
         """Chunks captured but not yet persisted."""
 
+    @abstractmethod
+    async def reinitialize(self, context: RecordingContext) -> None:
+        """Re-initialize the uploader for the next segment.
+        
+        Called after auto-uploading a segment, to prepare for the next segment.
+        For resumable uploads, this creates a fresh resumable URL.
+        For streaming, this resets any internal state.
+        
+        Args:
+            context: Recording context for the new segment.
+        """
+
     async def flush_buffered(self) -> int:
         """Retry anything held back. Called after the transport recovers.
 
@@ -225,6 +237,21 @@ class StreamingChunkUploader(ChunkUploader):
 
     def pending_count(self) -> int:
         return len(self._buffer)
+
+    async def reinitialize(self, context: RecordingContext) -> None:
+        """Re-initialize the uploader for the next segment.
+        
+        For streaming mode, re-initialization means resetting context
+        and clearing any internal state. The audio service will handle
+        creating new logical segments on the remote end.
+        """
+        self._context = context
+        # Buffer is preserved to handle any chunks that arrived during transition
+        
+        logger.info(
+            "Streaming uploader re-initialized for next segment",
+            extra={"meeting_id": context.meeting_id, "buffered_chunks": len(self._buffer)},
+        )
 
 
 class DirectChunkUploader(ChunkUploader):
@@ -458,12 +485,31 @@ class DirectChunkUploader(ChunkUploader):
     def pending_count(self) -> int:
         return self._sequencer.pending_count if self._sequencer else 0
 
+    async def reinitialize(self, context: RecordingContext) -> None:
+        """Re-initialize the uploader for the next segment.
+        
+        Creates a fresh resumable upload URL for the next segment while
+        keeping the sequencer and stats to ensure proper chunk ordering.
+        """
+        self._context = context
+        # Clear the target and state to force creation of a new resumable URL on next chunk
+        self._target = None
+        self._state = None
+        self._pending_bytes.clear()
+        self._failed = False
+        
+        logger.info(
+            "Uploader re-initialized for next segment",
+            extra={"meeting_id": context.meeting_id},
+        )
+
 
 def _object_name(meeting_id: str) -> str:
     """Build a collision-free object name for a recording.
 
     The meeting id alone is not safe: it can contain path separators, and a
     meeting recorded twice would otherwise overwrite its first recording.
+    Display names are handled separately via the CW API's display_name parameter.
     """
     safe = meeting_id.replace("/", "_").replace(":", "_").strip() or "meeting"
     return f"{safe}_{uuid.uuid4()}.webm"

@@ -17,7 +17,7 @@ from app.clients.meeting_api import MeetingAPIClient
 from app.clients.object_storage import ResumableUploadClient
 from app.core.config import Settings
 from app.repositories.base import MeetingStateRepository
-
+from app.recording.highlights_manager import HighlightsManager
 
 @dataclass(frozen=True, slots=True)
 class SessionDependencies:
@@ -30,3 +30,4 @@ class SessionDependencies:
     storage_client: ResumableUploadClient
     mail_client: MailClient | None = None
     meeting_api_client: MeetingAPIClient | None = None
+    highlights_manager: HighlightsManager | None = None,

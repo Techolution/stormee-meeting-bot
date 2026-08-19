@@ -24,8 +24,16 @@ async def start_recording(
 
     Audio is chunked and streamed continuously, so a recording that is
     interrupted still retains everything captured before the interruption.
+
+    Supports incremental segment recording:
+    - max_duration_seconds: Automatically upload and generate highlights after this duration
+    - generate_incremental_highlights: Request highlights for each segment
     """
-    await manager.start_recording(payload.meeting_id)
+    await manager.start_recording(
+        payload.meeting_id,
+        max_duration_seconds=payload.max_duration_seconds,
+        generate_incremental_highlights=payload.generate_incremental_highlights,
+    )
     return RecordingActionResponse(message="Recording started", meeting_id=payload.meeting_id)
 
 

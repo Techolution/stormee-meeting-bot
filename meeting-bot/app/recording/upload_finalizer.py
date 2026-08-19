@@ -16,25 +16,53 @@ import logging
 from app.clients.cw_utils import CWUtilsClient, UploadedFile
 from app.clients.mail import MailClient
 from app.recording.chunk_uploader import UploadOutcome
-from app.recording.models import RecordingContext
+from app.recording.highlights_manager import HighlightsManager
+from app.recording.models import RecordingContext, RecordingStats
 
 logger = logging.getLogger(__name__)
 
 
 class UploadFinalizer:
-    """Registers a completed recording and triggers downstream work."""
+    """Registers a completed recording and triggers downstream work.
+
+    Supports both single-upload and incremental highlight generation for
+    long-running meetings.
+    """
 
     def __init__(
         self,
         *,
         cw_client: CWUtilsClient,
         mail_client: MailClient | None = None,
+        highlights_manager: HighlightsManager | None = None,
     ) -> None:
         self._cw = cw_client
         self._mail = mail_client
+        self._highlights = highlights_manager
 
-    async def finalize(self, context: RecordingContext, outcome: UploadOutcome) -> bool:
+    async def finalize(
+        self,
+        context: RecordingContext,
+        outcome: UploadOutcome,
+        stats: RecordingStats | None = None,
+        is_final_segment: bool = True,
+        segment_number: int = 1,
+        generate_incremental_highlights: bool = False,
+    ) -> bool:
         """Confirm the upload with CW and start follow-up processing.
+
+        Supports both incremental segment uploads and final meeting uploads.
+        For segments, generates highlights for that portion. For final upload,
+        generates highlights for remaining audio after all segments.
+
+        Args:
+            context: Recording context with user and project information.
+            outcome: The upload outcome details.
+            stats: Optional recording stats for incremental highlights.
+            is_final_segment: True if this is the final upload (meeting ended),
+                False if this is an incremental segment upload.
+            segment_number: Which segment this is (1, 2, 3, ...) for labeling.
+            generate_incremental_highlights: If True, request highlights for this segment.
 
         Returns:
             True if CW accepted the confirmation. False when the step was
@@ -85,7 +113,29 @@ class UploadFinalizer:
             extra={"meeting_id": context.meeting_id, "object_name": uploaded.filename},
         )
 
-        await self._request_artifact(context, uploaded.filename)
+        # Request highlights or artifacts based on upload mode
+        if generate_incremental_highlights and self._highlights is not None and stats is not None:
+            if is_final_segment:
+                # For final segment, generate full artifact/highlights
+                await self._request_artifact(context, uploaded.filename)
+            else:
+                # For incremental segments, generate segment-specific highlights
+                await self._request_incremental_highlights(
+                    context, uploaded.filename, stats, segment_number
+                )
+        elif not is_final_segment and generate_incremental_highlights:
+            # Even without highlights manager, log that segment was uploaded
+            logger.info(
+                "Recording segment uploaded",
+                extra={
+                    "segment_number": segment_number,
+                    "meeting_id": context.meeting_id,
+                },
+            )
+        else:
+            # Standard finalization: request full artifact
+            await self._request_artifact(context, uploaded.filename)
+
         await self._notify_user(context)
         return True
 
@@ -116,6 +166,48 @@ class UploadFinalizer:
             logger.warning(
                 "Could not request meeting artifact generation",
                 extra={"meeting_id": context.meeting_id, "reason": str(error)},
+            )
+
+    async def _request_incremental_highlights(
+        self, context: RecordingContext, filename: str, stats: RecordingStats, segment_number: int = 1
+    ) -> None:
+        """Request highlights for an incremental segment of a recording.
+
+        Args:
+            context: Recording context with user and project information.
+            filename: Name of the audio file in storage.
+            stats: Recording statistics including duration.
+            segment_number: Which segment this is (1, 2, 3, ...) for labeling.
+        """
+        if self._highlights is None:
+            logger.warning(
+                "Highlights manager not available; skipping incremental highlights",
+                extra={"meeting_id": context.meeting_id},
+            )
+            return
+
+        try:
+            segment = await self._highlights.generate_incremental_highlights(
+                context=context,
+                stats=stats,
+                audio_filename=filename,
+                segment_number=segment_number,
+            )
+            if segment is None:
+                logger.debug(
+                    "Incremental highlights skipped due to duration threshold",
+                    extra={"meeting_id": context.meeting_id},
+                )
+            else:
+                logger.info(
+                    "Incremental highlights generated",
+                    extra={"segment_id": segment.segment_id},
+                )
+        except Exception as error:  # noqa: BLE001 - follow-up work, not the recording
+            logger.warning(
+                "Could not request incremental highlights",
+                exc_info=error,
+                extra={"meeting_id": context.meeting_id},
             )
 
     async def _notify_user(self, context: RecordingContext) -> None:

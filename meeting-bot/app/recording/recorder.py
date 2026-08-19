@@ -42,6 +42,8 @@ class Recorder:
         finalizer: UploadFinalizer | None = None,
         chunk_duration_ms: int = 5_000,
         finalize_grace_period_seconds: float = 2.0,
+        max_duration_seconds: int | None = None,
+        generate_incremental_highlights: bool = False,
     ) -> None:
         self._platform = platform
         self._uploader = uploader
@@ -49,6 +51,8 @@ class Recorder:
         self._finalizer = finalizer
         self._chunk_duration_ms = chunk_duration_ms
         self._grace_period = finalize_grace_period_seconds
+        self._max_duration_seconds = max_duration_seconds
+        self._generate_incremental_highlights = generate_incremental_highlights
 
         self._stats = RecordingStats()
         self._status = RecordingStatus.IDLE
@@ -59,6 +63,11 @@ class Recorder:
             stats=self._stats,
         )
         self._lock = asyncio.Lock()
+        
+        # For incremental segment uploads: track which segment we're on and when last upload occurred
+        self._segment_number = 1  # Current segment number (1-indexed)
+        self._last_segment_upload_duration = 0.0  # Duration (in seconds) at which last segment was uploaded
+        self._segment_upload_in_progress = False  # Guard flag to prevent concurrent segment uploads
 
     # ------------------------------------------------------------------
     # State
@@ -182,7 +191,17 @@ class Recorder:
         # Outside the lock: follow-up work talks to CW and can be slow, and
         # nothing else needs the recorder by this point.
         if self._finalizer is not None:
-            await self._finalizer.finalize(self._context, outcome)
+            # Finalize remaining audio as the final segment
+            # This handles: 1) recordings that never reached max_duration_seconds,
+            # or 2) the remaining audio after the last auto-uploaded segment
+            await self._finalizer.finalize(
+                context=self._context,
+                outcome=outcome,
+                stats=self._stats,
+                is_final_segment=True,  # This is the end of recording
+                segment_number=self._segment_number,  # Current segment (last one)
+                generate_incremental_highlights=self._generate_incremental_highlights,
+            )
 
         return outcome
 
@@ -202,10 +221,86 @@ class Recorder:
         """Retry buffered chunks. Wired to the websocket reconnect hook."""
         return await self._uploader.flush_buffered()
 
+    async def _trigger_segment_upload(self) -> None:
+        """Finalize current segment, upload it, generate highlights, and prepare for next segment.
+        
+        This is called when the max_duration_seconds threshold is reached during recording.
+        The segment is uploaded with highlights, and a new uploader is created for the
+        next segment. Recording continues uninterrupted.
+        """
+        # Finalize the current segment upload
+        outcome = await self._uploader.finalize()
+        
+        logger.info(
+            "Segment upload finalized",
+            extra={
+                "meeting_id": self._context.meeting_id,
+                "segment_number": self._segment_number,
+                "complete": outcome.complete,
+                "bytes": outcome.uploaded_bytes,
+            },
+        )
+        
+        # Request highlights/artifacts for this segment (not final)
+        if self._finalizer is not None:
+            await self._finalizer.finalize(
+                context=self._context,
+                outcome=outcome,
+                stats=self._stats,
+                is_final_segment=False,
+                segment_number=self._segment_number,
+                generate_incremental_highlights=self._generate_incremental_highlights,
+            )
+        
+        # Update segment tracking
+        self._last_segment_upload_duration = self._stats.duration_seconds
+        self._segment_number += 1
+        
+        logger.info(
+            "Preparing next segment for recording",
+            extra={
+                "meeting_id": self._context.meeting_id,
+                "next_segment_number": self._segment_number,
+            },
+        )
+        
+        # Re-initialize uploader for the next segment
+        # For direct uploads, this creates a new resumable URL
+        # For streaming, this updates context and lets audio service handle segmentation
+        await self._uploader.reinitialize(self._context)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
     async def _on_chunk(self, chunk: AudioChunk) -> None:
-        """Hand a captured chunk to the uploader."""
+        """Hand a captured chunk to the uploader.
+        
+        Also monitors duration for incremental segment uploads. When the
+        max_duration_seconds threshold is reached, automatically finalizes
+        the current segment, generates highlights, and creates a new uploader
+        for the next segment.
+        """
         await self._uploader.upload(chunk)
+        
+        # Check if we've reached the auto-upload duration threshold
+        # Use guard flag to prevent concurrent segment uploads
+        if (
+            not self._segment_upload_in_progress
+            and self._max_duration_seconds
+            and self._stats.duration_seconds >= (self._last_segment_upload_duration + self._max_duration_seconds)
+        ):
+            # Trigger auto-upload of current segment
+            self._segment_upload_in_progress = True
+            logger.info(
+                "Recording segment duration threshold reached; auto-uploading segment",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "segment_number": self._segment_number,
+                    "duration_seconds": self._stats.duration_seconds,
+                },
+            )
+            try:
+                await self._trigger_segment_upload()
+            finally:
+                self._segment_upload_in_progress = False
