@@ -134,8 +134,8 @@ auth-profile: ## Sign in to Google once and persist the browser profile
 auth-profile-docker: ## Sign in to Google using Docker and persist the browser profile
 	$(SHELL) scripts/create_auth_profile_docker.sh
 
-.PHONY: test-gcs-profile
-test-gcs-profile: ## Test Chrome profile download from GCS locally
+.PHONY: download-gcs-profile
+download-gcs-profile: ## Test Chrome profile download from GCS locally
 	@if [ -z "$GCS_BUCKET" ] || [ -z "$GCS_OBJECT_PATH" ]; then \
 		echo "Error: GCS_BUCKET and GCS_OBJECT_PATH environment variables are required"; \
 		echo ""; \
@@ -149,8 +149,8 @@ test-gcs-profile: ## Test Chrome profile download from GCS locally
 	fi
 	@$(SHELL) scripts/test_gcs_profile_download.sh
 
-.PHONY: test-gcs-profile-docker
-test-gcs-profile-docker: ## Test Chrome profile download from GCS using Docker (no local gcloud needed)
+.PHONY: download-gcs-profile-docker
+download-gcs-profile-docker: ## Test Chrome profile download from GCS using Docker (no local gcloud needed)
 	@if [ -z "$GCS_BUCKET" ] || [ -z "$GCS_OBJECT_PATH" ]; then \
 		echo "Error: GCS_BUCKET and GCS_OBJECT_PATH environment variables are required"; \
 		echo ""; \
@@ -163,6 +163,32 @@ test-gcs-profile-docker: ## Test Chrome profile download from GCS using Docker (
 		exit 1; \
 	fi
 	@$(SHELL) scripts/test_gcs_profile_download_docker.sh
+
+.PHONY: upload-gcs-profile
+upload-gcs-profile: ## Upload Chrome profile to GCS and clean up local archive
+	@if [ -z "$GCS_BUCKET" ] || [ -z "$GCS_OBJECT_PATH" ]; then \
+		echo "Error: GCS_BUCKET and GCS_OBJECT_PATH environment variables are required"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  export GCS_BUCKET=\"your-bucket\""; \
+		echo "  export GCS_OBJECT_PATH=\"profiles/chrome-profile.tar.gz\""; \
+		echo "  make upload-gcs-profile"; \
+		echo ""; \
+		echo "Prerequisites:"; \
+		echo "  1. Chrome profile must exist at: chrome_profile/"; \
+		echo "  2. Authenticated with GCP: gcloud auth application-default login"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ ! -d "chrome_profile" ] || [ -z "$(ls -A chrome_profile)" ]; then \
+		echo "Error: chrome_profile/ directory does not exist or is empty"; \
+		echo ""; \
+		echo "Create a profile first with:"; \
+		echo "  make auth-profile"; \
+		exit 1; \
+	fi
+	@echo "Uploading Chrome profile to GCS..."
+	@$(SHELL) scripts/zip_and_upload_to_gcs.sh
 
 .PHONY: clean
 clean: ## Remove build and test artefacts
