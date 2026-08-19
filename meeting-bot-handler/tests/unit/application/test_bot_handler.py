@@ -1,228 +1,317 @@
-"""
-Unit tests for the BotHandler class.
-
-After refactoring, BotHandler tests focus on **orchestration logic only**.
-HTTP communication is delegated to BotClient, which is mocked here.
-
-Tests cover:
-- Orchestration methods delegate to BotClient correctly
-- Results from BotClient are returned to caller
-- Exceptions from BotClient are properly propagated
-- Handler lifecycle management (close, context manager)
-- BotClient dependency injection
-
-HTTP communication details are tested in test_bot_client.py.
-"""
+"""Orchestration: dispatch, state transitions, idempotency, recovery."""
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+
 import httpx
+import pytest
 
-from app.application.bot_handler import BotHandler
-from app.application.bot_client import BotClient
-
-
-@pytest.fixture
-def mock_bot_client():
-    """Create a mocked BotClient for testing."""
-    mock_client = MagicMock(spec=BotClient)
-    # All methods are async, so wrap them with AsyncMock
-    mock_client.join_meeting = AsyncMock(return_value={"message": "Joined"})
-    mock_client.start_recording = AsyncMock(return_value={"message": "Recording started"})
-    mock_client.stop_recording = AsyncMock(return_value={"message": "Recording stopped"})
-    mock_client.start_transcription = AsyncMock(return_value={"message": "Transcription started"})
-    mock_client.stop_transcription = AsyncMock(return_value={"message": "Transcription stopped"})
-    mock_client.leave_meeting = AsyncMock(return_value={"message": "Left meeting"})
-    mock_client.get_meeting_status = AsyncMock(return_value={"status": "active"})
-    mock_client.close = AsyncMock()
-    return mock_client
+from app.application.bot_service_resolver import BotServiceResolver
+from app.domain.enums import BotStatus, MeetingStatus, RecordingStatus, TranscriptionStatus
+from app.domain.exceptions import (
+    BotServiceNotAssignedError,
+    InvalidSessionStateError,
+    NoBotPodAvailableError,
+    SessionNotFoundError,
+)
+from app.kubernetes.pod_pool import BotPodPool
+from tests.conftest import FakeBot, FakeKubernetesClient, bot_transport, running_pod
 
 
-@pytest.fixture
-async def bot_handler(mock_bot_client):
-    """Create a BotHandler instance with mocked BotClient for testing."""
-    handler = BotHandler(bot_client=mock_bot_client)
-    yield handler
-    # Cleanup
-    await handler.close()
+class TestDispatch:
+    async def test_start_assigns_a_pod_and_records_starting(
+        self, handler, created_session, session_service, fake_bot
+    ):
+        result = await handler.start_bot("sess-1")
 
+        assert result["bot_status"] == BotStatus.STARTING.value
+        assert ("POST", "/meetings/join") in fake_bot.calls
 
-class TestStartBot:
-    """Tests for start_bot orchestration."""
+        session = await session_service.get_session("sess-1")
+        assert session.meeting_status == MeetingStatus.STARTING
+        assert session.service_url == "http://bot-pod:5000"
+        assert session.starting_at is not None
 
-    @pytest.mark.asyncio
-    async def test_start_bot_delegates_to_bot_client(self, bot_handler, mock_bot_client):
-        """Test that start_bot delegates to BotClient.join_meeting."""
-        session_id = "test-meeting-123"
-        expected_response = {"message": "Joined meeting", "session_id": session_id}
-        mock_bot_client.join_meeting.return_value = expected_response
-        
-        result = await bot_handler.start_bot(session_id)
-        
-        # Verify delegation to BotClient
-        mock_bot_client.join_meeting.assert_called_once_with(session_id)
-        # Verify result is returned
-        assert result == expected_response
-
-    @pytest.mark.asyncio
-    async def test_start_bot_propagates_bot_client_errors(self, bot_handler, mock_bot_client):
-        """Test that start_bot propagates BotClient exceptions."""
-        session_id = "test-meeting-456"
-        mock_bot_client.join_meeting.side_effect = httpx.HTTPStatusError(
-            "404 Not Found", request=None, response=None
+    async def test_dispatch_skips_a_busy_pod_and_takes_the_next(
+        self, make_handler, session_service, settings, created_session
+    ):
+        busy, free = FakeBot(busy=True), FakeBot()
+        http = httpx.AsyncClient(
+            transport=bot_transport({"10.0.0.1": busy, "10.0.0.2": free})
         )
-        
-        with pytest.raises(httpx.HTTPStatusError):
-            await bot_handler.start_bot(session_id)
+        pool = BotPodPool(
+            kubernetes=FakeKubernetesClient(
+                [running_pod("bot-busy", "10.0.0.1"), running_pod("bot-free", "10.0.0.2")]
+            ),
+            http_client=http,
+            settings=settings,
+        )
+        handler = make_handler(http, pod_pool=pool, static_service_url=None)
+
+        await handler.start_bot("sess-1")
+
+        session = await session_service.get_session("sess-1")
+        assert session.pod_name == "bot-free"
+        assert ("POST", "/meetings/join") not in busy.calls
+
+    async def test_dispatch_falls_through_to_the_next_pod_on_a_join_race(
+        self, make_handler, session_service, settings, created_session
+    ):
+        # Both pods probe free, but the first is claimed before the join lands.
+        first, second = FakeBot(claimed_after_probe=True), FakeBot()
+        http = httpx.AsyncClient(
+            transport=bot_transport({"10.0.0.1": first, "10.0.0.2": second})
+        )
+        pool = BotPodPool(
+            kubernetes=FakeKubernetesClient(
+                [running_pod("bot-a", "10.0.0.1"), running_pod("bot-b", "10.0.0.2")]
+            ),
+            http_client=http,
+            settings=settings,
+        )
+        handler = make_handler(http, pod_pool=pool, static_service_url=None)
+
+        await handler.start_bot("sess-1")
+
+        session = await session_service.get_session("sess-1")
+        assert session.pod_name == "bot-b"
+        assert ("POST", "/meetings/join") in first.calls  # it was tried
+
+    async def test_no_free_pod_is_a_distinct_failure(
+        self, make_handler, session_service, settings, created_session
+    ):
+        busy = FakeBot(busy=True)
+        http = httpx.AsyncClient(transport=bot_transport({"10.0.0.1": busy}))
+        pool = BotPodPool(
+            kubernetes=FakeKubernetesClient([running_pod("bot-busy", "10.0.0.1")]),
+            http_client=http,
+            settings=settings,
+        )
+        handler = make_handler(http, pod_pool=pool, static_service_url=None)
+
+        with pytest.raises(NoBotPodAvailableError):
+            await handler.start_bot("sess-1")
+
+        session = await session_service.get_session("sess-1")
+        assert session.bot_status == BotStatus.PENDING  # nothing was claimed
+
+    async def test_starting_twice_is_refused(self, handler, created_session):
+        await handler.start_bot("sess-1")
+
+        with pytest.raises(InvalidSessionStateError):
+            await handler.start_bot("sess-1")
+
+    async def test_unknown_session_is_reported_as_such(self, handler):
+        with pytest.raises(SessionNotFoundError):
+            await handler.start_bot("nope")
+
+    async def test_a_command_before_dispatch_is_refused(
+        self, make_handler, http_client, created_session
+    ):
+        # No discovery, no static bot: there is nowhere to send the command,
+        # and saying so beats a 500 from a None URL.
+        handler = make_handler(http_client, static_service_url=None)
+
+        with pytest.raises(BotServiceNotAssignedError):
+            await handler.start_recording("sess-1")
+
+
+class TestJoinWatcher:
+    async def test_session_becomes_active_once_the_bot_is_admitted(
+        self, handler, created_session, session_service, fake_bot
+    ):
+        await handler.start_bot("sess-1")
+        fake_bot.admit()
+
+        await _settle(session_service, "sess-1", BotStatus.RUNNING)
+
+        session = await session_service.get_session("sess-1")
+        assert session.meeting_status == MeetingStatus.ACTIVE
+        assert session.started_at is not None
+        assert session.bot_session_id == "bot-session-1"
+
+    async def test_a_join_that_never_completes_fails_the_session(
+        self, handler, created_session, session_service
+    ):
+        await handler.start_bot("sess-1")  # never admitted
+
+        await _settle(session_service, "sess-1", BotStatus.FAILED)
+
+        session = await session_service.get_session("sess-1")
+        assert session.meeting_status == MeetingStatus.FAILED
+        assert "never reached the meeting" in session.last_error
 
 
 class TestRecording:
-    """Tests for recording orchestration methods."""
+    async def test_start_then_stop_tracks_a_recording_take(
+        self, handler, created_session, session_service
+    ):
+        await handler.start_bot("sess-1")
 
-    @pytest.mark.asyncio
-    async def test_start_recording_delegates(self, bot_handler, mock_bot_client):
-        """Test that start_recording delegates to BotClient."""
-        session_id = "test-meeting-rec"
-        expected = {"message": "Recording started"}
-        mock_bot_client.start_recording.return_value = expected
-        
-        result = await bot_handler.start_recording(session_id)
-        
-        mock_bot_client.start_recording.assert_called_once_with(session_id)
-        assert result == expected
+        started = await handler.start_recording("sess-1")
+        assert started["recording_status"] == RecordingStatus.RECORDING.value
 
-    @pytest.mark.asyncio
-    async def test_stop_recording_delegates(self, bot_handler, mock_bot_client):
-        """Test that stop_recording delegates to BotClient."""
-        session_id = "test-meeting-stop-rec"
-        expected = {"message": "Recording stopped"}
-        mock_bot_client.stop_recording.return_value = expected
-        
-        result = await bot_handler.stop_recording(session_id)
-        
-        mock_bot_client.stop_recording.assert_called_once_with(session_id)
-        assert result == expected
+        await handler.stop_recording("sess-1")
+
+        session = await session_service.get_session("sess-1")
+        assert session.active_recording_status == RecordingStatus.STOPPED
+        take = session.recordings[0]
+        assert take.status == RecordingStatus.STOPPED
+        # Final counters are reconciled from the bot, not assumed.
+        assert take.chunks_uploaded == 48
+        assert take.bytes_uploaded == 3145728
+        assert take.stopped_at is not None
+
+    async def test_recording_twice_is_refused(self, handler, created_session):
+        await handler.start_bot("sess-1")
+        await handler.start_recording("sess-1")
+
+        with pytest.raises(InvalidSessionStateError):
+            await handler.start_recording("sess-1")
+
+    async def test_stopping_a_recording_that_is_not_running_is_a_no_op(
+        self, handler, created_session, fake_bot
+    ):
+        await handler.start_bot("sess-1")
+
+        result = await handler.stop_recording("sess-1")
+
+        assert result["recording_status"] == RecordingStatus.NOT_STARTED.value
+        assert ("POST", "/recordings/stop") not in fake_bot.calls
 
 
 class TestTranscription:
-    """Tests for transcription orchestration methods."""
+    async def test_start_and_stop_move_the_status(
+        self, handler, created_session, session_service
+    ):
+        await handler.start_bot("sess-1")
 
-    @pytest.mark.asyncio
-    async def test_start_transcription_delegates(self, bot_handler, mock_bot_client):
-        """Test that start_transcription delegates to BotClient."""
-        session_id = "test-meeting-trans"
-        expected = {"message": "Transcription started"}
-        mock_bot_client.start_transcription.return_value = expected
-        
-        result = await bot_handler.start_transcription(session_id)
-        
-        mock_bot_client.start_transcription.assert_called_once_with(session_id)
-        assert result == expected
+        await handler.start_transcription("sess-1")
+        session = await session_service.get_session("sess-1")
+        assert session.transcription_status == TranscriptionStatus.RUNNING
 
-    @pytest.mark.asyncio
-    async def test_stop_transcription_delegates(self, bot_handler, mock_bot_client):
-        """Test that stop_transcription delegates to BotClient."""
-        session_id = "test-meeting-trans-stop"
-        expected = {"message": "Transcription stopped"}
-        mock_bot_client.stop_transcription.return_value = expected
-        
-        result = await bot_handler.stop_transcription(session_id)
-        
-        mock_bot_client.stop_transcription.assert_called_once_with(session_id)
-        assert result == expected
+        await handler.stop_transcription("sess-1")
+        session = await session_service.get_session("sess-1")
+        assert session.transcription_status == TranscriptionStatus.COMPLETED
+
+    async def test_stopping_transcription_that_never_started_is_a_no_op(
+        self, handler, created_session, fake_bot
+    ):
+        await handler.start_bot("sess-1")
+
+        await handler.stop_transcription("sess-1")
+
+        assert ("POST", "/transcription/stop") not in fake_bot.calls
 
 
-class TestLeaveAndStop:
-    """Tests for leave and stop orchestration methods."""
+class TestLeave:
+    async def test_leave_completes_the_session(
+        self, handler, created_session, session_service, fake_bot
+    ):
+        await handler.start_bot("sess-1")
 
-    @pytest.mark.asyncio
-    async def test_leave_delegates(self, bot_handler, mock_bot_client):
-        """Test that leave delegates to BotClient.leave_meeting."""
-        session_id = "test-meeting-leave"
-        expected = {"message": "Left meeting"}
-        mock_bot_client.leave_meeting.return_value = expected
-        
-        result = await bot_handler.leave(session_id)
-        
-        mock_bot_client.leave_meeting.assert_called_once_with(session_id)
-        assert result == expected
+        await handler.leave("sess-1")
 
-    @pytest.mark.asyncio
-    async def test_stop_delegates(self, bot_handler, mock_bot_client):
-        """Test that stop delegates to BotClient.leave_meeting (equivalent)."""
-        session_id = "test-meeting-stop"
-        expected = {"message": "Left meeting"}
-        mock_bot_client.leave_meeting.return_value = expected
-        
-        result = await bot_handler.stop(session_id)
-        
-        # stop() calls leave_meeting
-        mock_bot_client.leave_meeting.assert_called_once_with(session_id)
-        assert result == expected
+        session = await session_service.get_session("sess-1")
+        assert session.meeting_status == MeetingStatus.COMPLETED
+        assert session.completed_at is not None
+        assert ("POST", "/meetings/leave") in fake_bot.calls
 
-    @pytest.mark.asyncio
-    async def test_leave_propagates_errors(self, bot_handler, mock_bot_client):
-        """Test that leave propagates BotClient errors."""
-        session_id = "test-meeting-error"
-        mock_bot_client.leave_meeting.side_effect = httpx.HTTPStatusError(
-            "404 Not Found", request=None, response=None
+    async def test_leaving_twice_is_a_no_op(self, handler, created_session):
+        await handler.start_bot("sess-1")
+        await handler.leave("sess-1")
+
+        result = await handler.leave("sess-1")
+
+        assert result["meeting_status"] == MeetingStatus.COMPLETED.value
+
+    async def test_leaving_a_session_that_was_never_dispatched_completes_it(
+        self, handler, created_session, session_service, fake_bot
+    ):
+        await handler.leave("sess-1")
+
+        session = await session_service.get_session("sess-1")
+        assert session.meeting_status == MeetingStatus.COMPLETED
+        assert fake_bot.calls == []
+
+    async def test_a_recording_left_running_is_marked_stopped(
+        self, handler, created_session, session_service
+    ):
+        await handler.start_bot("sess-1")
+        await handler.start_recording("sess-1")
+
+        await handler.leave("sess-1")
+
+        session = await session_service.get_session("sess-1")
+        assert session.active_recording_status == RecordingStatus.STOPPED
+
+
+class TestStatus:
+    async def test_status_merges_durable_state_with_the_live_pod_view(
+        self, handler, created_session, fake_bot
+    ):
+        await handler.start_bot("sess-1")
+        fake_bot.admit()
+
+        status = await handler.get_status("sess-1")
+
+        assert status["runtime"]["session_state"] == "in_meeting"
+        # Reading the pod reconciles the record.
+        assert status["bot_status"] == BotStatus.RUNNING.value
+        assert status["runtime_error"] is None
+
+    async def test_an_unreachable_pod_degrades_the_status_rather_than_failing_it(
+        self, make_handler, session_service, created_session
+    ):
+        offline = FakeBot(offline=True)
+        handler = make_handler(
+            httpx.AsyncClient(transport=bot_transport({"bot-pod": offline}))
         )
-        
-        with pytest.raises(httpx.HTTPStatusError):
-            await bot_handler.leave(session_id)
+        session = await session_service.get_session("sess-1")
+        await session_service.assign_bot(session, "http://bot-pod:5000", pod_name="bot-a")
+
+        status = await handler.get_status("sess-1")
+
+        assert status["runtime"] is None
+        assert "unreachable" in status["runtime_error"]
+
+    async def test_runtime_can_be_skipped(self, handler, created_session, fake_bot):
+        await handler.start_bot("sess-1")
+        calls_before = len(fake_bot.calls)
+
+        status = await handler.get_status("sess-1", include_runtime=False)
+
+        assert status["runtime"] is None
+        assert len(fake_bot.calls) == calls_before
 
 
-class TestGetStatus:
-    """Tests for get_status orchestration method."""
-
-    @pytest.mark.asyncio
-    async def test_get_status_delegates(self, bot_handler, mock_bot_client):
-        """Test that get_status delegates to BotClient.get_meeting_status."""
-        session_id = "test-meeting-status"
-        expected_status = {"status": "active", "recording": True}
-        mock_bot_client.get_meeting_status.return_value = expected_status
-        
-        result = await bot_handler.get_status(session_id)
-        
-        mock_bot_client.get_meeting_status.assert_called_once_with(session_id)
-        assert result == expected_status
-
-    @pytest.mark.asyncio
-    async def test_get_status_propagates_errors(self, bot_handler, mock_bot_client):
-        """Test that get_status propagates BotClient errors."""
-        session_id = "test-meeting-error"
-        mock_bot_client.get_meeting_status.side_effect = httpx.HTTPStatusError(
-            "404 Not Found", request=None, response=None
+class TestRecovery:
+    async def test_a_lost_assignment_is_recovered_from_the_cluster(
+        self, make_handler, session_service, settings, created_session
+    ):
+        # The handler restarted and lost the pod assignment; the meeting is
+        # still running on a pod that can be found by asking.
+        holder = FakeBot()
+        holder.meeting_id = "demo-001"
+        http = httpx.AsyncClient(transport=bot_transport({"10.0.0.2": holder}))
+        pool = BotPodPool(
+            kubernetes=FakeKubernetesClient([running_pod("bot-b", "10.0.0.2")]),
+            http_client=http,
+            settings=settings,
         )
-        
-        with pytest.raises(httpx.HTTPStatusError):
-            await bot_handler.get_status(session_id)
+        resolver = BotServiceResolver(pod_pool=pool, static_service_url=None)
+
+        target = await resolver.resolve(await session_service.get_session("sess-1"))
+
+        assert target.pod_name == "bot-b"
 
 
-class TestBotHandlerDependencyInjection:
-    """Tests for BotHandler dependency injection."""
-
-    def test_init_with_provided_bot_client(self, mock_bot_client):
-        """Test initialization with provided BotClient."""
-        handler = BotHandler(bot_client=mock_bot_client)
-        assert handler.bot_client is mock_bot_client
-
-    def test_init_creates_default_bot_client(self):
-        """Test initialization creates BotClient if not provided."""
-        handler = BotHandler()
-        assert isinstance(handler.bot_client, BotClient)
-
-    def test_context_manager(self, mock_bot_client):
-        """Test context manager support."""
-        handler = BotHandler(bot_client=mock_bot_client)
-        assert hasattr(handler, '__aenter__')
-        assert hasattr(handler, '__aexit__')
-
-    @pytest.mark.asyncio
-    async def test_close_delegates_to_bot_client(self, bot_handler, mock_bot_client):
-        """Test that close() delegates to BotClient.close()."""
-        await bot_handler.close()
-        mock_bot_client.close.assert_called_once()
-
+async def _settle(session_service, session_id: str, expected: BotStatus, tries: int = 200) -> None:
+    """Wait for the background join watcher to reach a conclusion."""
+    for _ in range(tries):
+        session = await session_service.get_session(session_id)
+        if session.bot_status == expected:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail(f"session stayed at {session.bot_status}, expected {expected}")

@@ -1,10 +1,18 @@
+# Entry point for callers of the control plane — schedulers, Cloud Tasks, the
+# meeting API. Load balancing across handler replicas is fine: unlike a bot
+# pod, any handler can serve any session.
+
 apiVersion: v1
 kind: Service
 metadata:
   name: meeting-bot-handler
+  labels:
+    app.kubernetes.io/name: meeting-bot-handler
 spec:
+  type: ClusterIP
   selector:
-    app: meeting-bot-handler
+    app.kubernetes.io/name: meeting-bot-handler
   ports:
-    - port: 80
-      targetPort: 8000
+    - name: http
+      port: 80
+      targetPort: http

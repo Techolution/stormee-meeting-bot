@@ -1,23 +1,91 @@
+# Meeting bot handler — the control plane.
+#
+# Unlike a bot pod, this one is stateless per request and serves many sessions
+# at once, so it scales normally and its readiness reflects whether it can
+# reach the cluster, not whether it is busy.
+#
+# One caveat while session state is in memory: the join watcher that promotes a
+# session to ACTIVE lives in the process that accepted the dispatch. Run a
+# single replica until session state is moved to PostgreSQL.
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: meeting-bot-handler
+  labels:
+    app.kubernetes.io/name: meeting-bot-handler
+    app.kubernetes.io/component: control-plane
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: meeting-bot-handler
+      app.kubernetes.io/name: meeting-bot-handler
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
   template:
     metadata:
       labels:
-        app: meeting-bot-handler
+        app.kubernetes.io/name: meeting-bot-handler
     spec:
+      # Grants pod discovery through the Role in rbac.yaml.
       serviceAccountName: meeting-bot-handler
+
+      # A leave in flight should finish before the process goes away.
+      terminationGracePeriodSeconds: 60
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+
       containers:
         - name: meeting-bot-handler
           image: meeting-bot-handler:latest
+          imagePullPolicy: IfNotPresent
+
           ports:
-            - containerPort: 8000
-          env:
-            - name: KUBERNETES_NAMESPACE
-              value: meeting-bots
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: meeting-bot-handler-config
+
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+          # Liveness: dependency-free, true whenever the event loop runs.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness: 503 when no bot pod can be discovered, which keeps
+          # traffic off a handler that cannot dispatch anywhere.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 10
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

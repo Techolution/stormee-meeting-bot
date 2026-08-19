@@ -1,15 +1,19 @@
 FROM python:3.12-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+
+# The Deployment sets runAsNonRoot with this uid; the image must agree, or the
+# kubelet refuses to start the container.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin handler
+USER 10001
 
 EXPOSE 8000
 

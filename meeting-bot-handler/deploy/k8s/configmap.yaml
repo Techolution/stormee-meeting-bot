@@ -1,7 +1,36 @@
+# Handler configuration.
+#
+# BOT_LABEL_SELECTOR and BOT_NAMESPACE are the two that must match the bot
+# Deployment exactly. A selector that matches nothing is indistinguishable from
+# a cluster with no bots: GET /bot-pods reports zero pods and every dispatch
+# returns 503.
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: meeting-bot-handler
+  name: meeting-bot-handler-config
+  labels:
+    app.kubernetes.io/name: meeting-bot-handler
 data:
-  KUBERNETES_NAMESPACE: meeting-bots
-  BOT_IMAGE: meeting-bot:latest
+  ENVIRONMENT: "prod"
+  LOG_LEVEL: "INFO"
+
+  # --- Bot pod discovery ----------------------------------------------------
+  # Namespace the bot pods run in.
+  BOT_NAMESPACE: "default"
+  # Must match the pod template labels in the bot Deployment.
+  BOT_LABEL_SELECTOR: "app.kubernetes.io/name=meeting-bot"
+  # containerPort of the bot's http port, not the Service port: the handler
+  # talks to pod IPs directly.
+  BOT_POD_PORT: "5000"
+  BOT_API_PREFIX: "/api/meet"
+  KUBERNETES_ENABLED: "true"
+
+  # --- Timeouts -------------------------------------------------------------
+  BOT_REQUEST_TIMEOUT_SECONDS: "30"
+  # Applied to every pod in the readiness fan-out, so keep it short.
+  BOT_PROBE_TIMEOUT_SECONDS: "3"
+  JOIN_POLL_INTERVAL_SECONDS: "5"
+  # Must exceed the bot's MEETING_ADMISSION_TIMEOUT_SECONDS, or the handler
+  # gives up on a join the bot is still waiting on.
+  JOIN_POLL_TIMEOUT_SECONDS: "600"

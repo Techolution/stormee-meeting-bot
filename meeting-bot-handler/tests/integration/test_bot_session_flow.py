@@ -1,244 +1,113 @@
-"""
-Integration tests for the complete bot session lifecycle.
+"""The whole lifecycle over HTTP, against a simulated bot pod.
 
-Tests cover the full end-to-end flow:
-1. Start a session (bot joins meeting)
-2. Start recording
-3. Start transcription
-4. Get status
-5. Stop recording
-6. Stop transcription
-7. Leave session
-
-These tests use mocked httpx to simulate the bot service responses.
+Mirrors the sequence an integrator follows: create, start, poll until active,
+record, transcribe, leave.
 """
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-import httpx
-from fastapi.testclient import TestClient
 
-from app.main import app
-from app.application.bot_handler import BotHandler
-from app.bootstrap import create_bot_handler
+def test_full_session_lifecycle(client, fake_bot):
+    created = client.post(
+        "/bot-sessions",
+        json={
+            "meeting_id": "demo-001",
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "user_name": "Alice Smith",
+            "meeting_title": "Weekly Sync",
+        },
+    )
+    assert created.status_code == 201
+    session_id = created.json()["session_id"]
+    assert created.json()["meeting_status"] == "CREATED"
 
+    # Dispatch is accepted, not completed: the bot may sit in the lobby.
+    started = client.post(f"/bot-sessions/{session_id}/start")
+    assert started.status_code == 202
+    assert started.json()["bot_status"] == "STARTING"
 
-@pytest.fixture
-def client():
-    """Create a FastAPI test client."""
-    return TestClient(app)
+    # The host admits the bot; status reconciles on the next read.
+    fake_bot.admit()
+    status = client.get(f"/bot-sessions/{session_id}/status").json()
+    assert status["meeting_status"] == "ACTIVE"
+    assert status["runtime"]["session_state"] == "in_meeting"
 
+    assert client.post(f"/bot-sessions/{session_id}/recording/start").status_code == 202
+    assert client.post(f"/bot-sessions/{session_id}/transcription/start").status_code == 202
 
-@pytest.fixture
-def mock_bot_handler():
-    """Create a mock BotHandler."""
-    handler = MagicMock(spec=BotHandler)
-    handler.start_bot = AsyncMock()
-    handler.start_recording = AsyncMock()
-    handler.stop_recording = AsyncMock()
-    handler.start_transcription = AsyncMock()
-    handler.stop_transcription = AsyncMock()
-    handler.leave = AsyncMock()
-    handler.stop = AsyncMock()
-    handler.get_status = AsyncMock(return_value={"status": "active", "recording": True})
-    return handler
+    transcript = client.get(f"/bot-sessions/{session_id}/transcript")
+    assert transcript.status_code == 200
+    assert transcript.json()["count"] == 1
 
+    chat = client.get(f"/bot-sessions/{session_id}/chat")
+    assert chat.status_code == 200
+    assert chat.json()["chat_segments"][0]["sender"] == "Bob"
 
-class TestBotSessionLifecycle:
-    """Test the complete bot session lifecycle."""
+    stopped = client.post(f"/bot-sessions/{session_id}/recording/stop")
+    assert stopped.status_code == 200
+    assert stopped.json()["recording_status"] == "STOPPED"
 
-    def test_start_session(self, client, mock_bot_handler):
-        """Test starting a session."""
-        session_id = "test-meeting-123"
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.post(f"/bot-sessions/{session_id}/start")
-            
-            assert response.status_code == 202
-            data = response.json()
-            assert data["session_id"] == session_id
-            assert "started" in data["message"].lower()
-            mock_bot_handler.start_bot.assert_called_once_with(session_id)
+    left = client.post(f"/bot-sessions/{session_id}/leave")
+    assert left.status_code == 200
 
-    def test_start_recording(self, client, mock_bot_handler):
-        """Test starting recording."""
-        session_id = "test-meeting-456"
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.post(f"/bot-sessions/{session_id}/recording/start")
-            
-            assert response.status_code == 202
-            data = response.json()
-            assert data["session_id"] == session_id
-            assert "recording" in data["message"].lower()
-            mock_bot_handler.start_recording.assert_called_once_with(session_id)
-
-    def test_stop_recording(self, client, mock_bot_handler):
-        """Test stopping recording."""
-        session_id = "test-meeting-789"
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.post(f"/bot-sessions/{session_id}/recording/stop")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["session_id"] == session_id
-            mock_bot_handler.stop_recording.assert_called_once_with(session_id)
-
-    def test_start_transcription(self, client, mock_bot_handler):
-        """Test starting transcription."""
-        session_id = "test-meeting-trans1"
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.post(f"/bot-sessions/{session_id}/transcription/start")
-            
-            assert response.status_code == 202
-            data = response.json()
-            assert data["session_id"] == session_id
-            assert "transcription" in data["message"].lower()
-            mock_bot_handler.start_transcription.assert_called_once_with(session_id)
-
-    def test_stop_transcription(self, client, mock_bot_handler):
-        """Test stopping transcription."""
-        session_id = "test-meeting-trans2"
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.post(f"/bot-sessions/{session_id}/transcription/stop")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["session_id"] == session_id
-            mock_bot_handler.stop_transcription.assert_called_once_with(session_id)
-
-    def test_get_session_status(self, client, mock_bot_handler):
-        """Test getting session status."""
-        session_id = "test-meeting-status"
-        expected_status = {"status": "active", "recording": True, "transcription": True}
-        mock_bot_handler.get_status.return_value = expected_status
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.get(f"/bot-sessions/{session_id}/status")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["session_id"] == session_id
-            assert data["status"] == expected_status
-            mock_bot_handler.get_status.assert_called_once_with(session_id)
-
-    def test_leave_session(self, client, mock_bot_handler):
-        """Test leaving a session."""
-        session_id = "test-meeting-leave"
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.post(f"/bot-sessions/{session_id}/leave")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["session_id"] == session_id
-            assert "left" in data["message"].lower()
-            mock_bot_handler.leave.assert_called_once_with(session_id)
-
-    def test_stop_session(self, client, mock_bot_handler):
-        """Test stopping a session."""
-        session_id = "test-meeting-stop"
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_bot_handler):
-            response = client.post(f"/bot-sessions/{session_id}/stop")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["session_id"] == session_id
-            assert "stopped" in data["message"].lower()
-            mock_bot_handler.stop.assert_called_once_with(session_id)
+    final = client.get(f"/bot-sessions/{session_id}").json()
+    assert final["meeting_status"] == "COMPLETED"
+    assert final["recording_status"] == "STOPPED"
+    assert final["transcription_status"] == "COMPLETED"
 
 
-class TestBotSessionErrors:
-    """Test error handling in bot session endpoints."""
+def test_leave_finalizes_a_running_recording(client, fake_bot):
+    session_id = _start(client)
+    client.post(f"/bot-sessions/{session_id}/recording/start")
 
-    def test_start_session_error(self, client):
-        """Test error handling when start_bot fails."""
-        session_id = "test-meeting-error"
-        mock_handler = MagicMock(spec=BotHandler)
-        mock_handler.start_bot = AsyncMock(side_effect=Exception("Bot service unavailable"))
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_handler):
-            response = client.post(f"/bot-sessions/{session_id}/start")
-            
-            assert response.status_code == 500
-            data = response.json()
-            assert "detail" in data
-            assert "Failed to start session" in data["detail"]
+    client.post(f"/bot-sessions/{session_id}/leave")
 
-    def test_get_status_error(self, client):
-        """Test error handling when get_status fails."""
-        session_id = "test-meeting-status-error"
-        mock_handler = MagicMock(spec=BotHandler)
-        mock_handler.get_status = AsyncMock(side_effect=httpx.HTTPStatusError(
-            "404 Not Found", request=None, response=None
-        ))
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_handler):
-            response = client.get(f"/bot-sessions/{session_id}/status")
-            
-            assert response.status_code == 500
-            data = response.json()
-            assert "detail" in data
-            assert "Failed to get session status" in data["detail"]
+    final = client.get(f"/bot-sessions/{session_id}").json()
+    assert final["recording_status"] == "STOPPED"
 
 
-class TestBotSessionSequenceFlow:
-    """Test the complete sequence of operations."""
+def test_sessions_can_be_listed_and_filtered(client):
+    first = _start(client, "demo-001")
+    _start(client, "demo-002")
+    client.post(f"/bot-sessions/{first}/leave")
 
-    def test_full_session_lifecycle(self, client):
-        """Test the full session lifecycle: start -> record -> transcribe -> leave."""
-        session_id = "test-meeting-full-flow"
-        mock_handler = MagicMock(spec=BotHandler)
-        mock_handler.start_bot = AsyncMock()
-        mock_handler.start_recording = AsyncMock()
-        mock_handler.start_transcription = AsyncMock()
-        mock_handler.get_status = AsyncMock(return_value={"status": "active"})
-        mock_handler.stop_recording = AsyncMock()
-        mock_handler.stop_transcription = AsyncMock()
-        mock_handler.leave = AsyncMock()
-        
-        with patch('app.api.routes.bot.create_bot_handler', return_value=mock_handler):
-            # Start session
-            response = client.post(f"/bot-sessions/{session_id}/start")
-            assert response.status_code == 202
-            
-            # Start recording
-            response = client.post(f"/bot-sessions/{session_id}/recording/start")
-            assert response.status_code == 202
-            
-            # Start transcription
-            response = client.post(f"/bot-sessions/{session_id}/transcription/start")
-            assert response.status_code == 202
-            
-            # Get status
-            response = client.get(f"/bot-sessions/{session_id}/status")
-            assert response.status_code == 200
-            assert response.json()["session_id"] == session_id
-            
-            # Stop recording
-            response = client.post(f"/bot-sessions/{session_id}/recording/stop")
-            assert response.status_code == 200
-            
-            # Stop transcription
-            response = client.post(f"/bot-sessions/{session_id}/transcription/stop")
-            assert response.status_code == 200
-            
-            # Leave session
-            response = client.post(f"/bot-sessions/{session_id}/leave")
-            assert response.status_code == 200
-            
-            # Verify all methods were called with correct session_id
-            mock_handler.start_bot.assert_called_once_with(session_id)
-            mock_handler.start_recording.assert_called_once_with(session_id)
-            mock_handler.start_transcription.assert_called_once_with(session_id)
-            mock_handler.get_status.assert_called_once_with(session_id)
-            mock_handler.stop_recording.assert_called_once_with(session_id)
-            mock_handler.stop_transcription.assert_called_once_with(session_id)
-            mock_handler.leave.assert_called_once_with(session_id)
+    everything = client.get("/bot-sessions").json()
+    active = client.get("/bot-sessions", params={"active_only": True}).json()
 
+    assert len(everything) == 2
+    assert [s["meeting_id"] for s in active] == ["demo-002"]
+
+
+def test_auto_start_dispatches_on_creation(client, fake_bot):
+    response = client.post(
+        "/bot-sessions",
+        json={
+            "meeting_id": "demo-003",
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "auto_start": True,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["bot_status"] == "STARTING"
+    assert ("POST", "/meetings/join") in fake_bot.calls
+
+
+def test_the_request_id_reaches_the_bot(client, fake_bot):
+    session_id = _start(client)
+
+    client.post(
+        f"/bot-sessions/{session_id}/recording/start",
+        headers={"X-Request-ID": "trace-me-123"},
+    )
+
+    assert "trace-me-123" in fake_bot.request_ids
+
+
+def _start(client, meeting_id: str = "demo-001") -> str:
+    session_id = client.post(
+        "/bot-sessions",
+        json={"meeting_id": meeting_id, "meeting_url": "https://meet.google.com/abc-defg-hij"},
+    ).json()["session_id"]
+    client.post(f"/bot-sessions/{session_id}/start")
+    return session_id

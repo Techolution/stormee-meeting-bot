@@ -25,6 +25,16 @@ class SessionRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_by_meeting_id(self, meeting_id: str) -> Optional[BotSession]:
+        """Fetch the most recent session for a meeting id."""
+        pass
+
+    @abstractmethod
+    async def list_sessions(self, active_only: bool = False) -> List[BotSession]:
+        """List stored sessions, newest first."""
+        pass
+
+    @abstractmethod
     async def add_recording(self, recording: MeetingRecording) -> MeetingRecording:
         """Add a new recording take to a session."""
         pass

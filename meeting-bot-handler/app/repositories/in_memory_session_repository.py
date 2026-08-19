@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from app.domain.enums import RecordingStatus
@@ -36,6 +37,24 @@ class InMemorySessionRepository(SessionRepository):
             ]
             session.events = self._events.get(session_id, [])
             return session
+
+    async def get_by_meeting_id(self, meeting_id: str) -> Optional[BotSession]:
+        async with self._lock:
+            matches = [s for s in self._sessions.values() if s.meeting_id == meeting_id]
+            if not matches:
+                return None
+            return max(matches, key=lambda s: s.created_at or datetime.min.replace(tzinfo=timezone.utc))
+
+    async def list_sessions(self, active_only: bool = False) -> List[BotSession]:
+        async with self._lock:
+            sessions = list(self._sessions.values())
+            if active_only:
+                sessions = [s for s in sessions if not s.is_terminal]
+            return sorted(
+                sessions,
+                key=lambda s: s.created_at or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
 
     async def update(self, session: BotSession) -> BotSession:
         async with self._lock:

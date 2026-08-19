@@ -1,73 +1,101 @@
 """Bot session lifecycle endpoints.
 
-These endpoints allow clients to control the lifecycle of bot meetings:
-- Start a bot session (join meeting)
-- Start/stop recording
-- Start/stop transcription
-- Get session status
-- Leave meeting
+Routes are thin: validate, delegate, shape the response. Failures propagate as
+domain exceptions and are turned into the error envelope by the handlers
+registered in ``app.api.errors`` — a route that swallowed them into a 500 would
+throw away the distinction between "no such session", "pod busy" and "cluster
+down", which is the only thing a caller can act on.
+
+Status codes follow what actually happened. 202 where the bot has merely
+accepted a command and the work continues asynchronously; 200 where the
+operation is complete when the response is written.
 """
 
 from __future__ import annotations
+
 import uuid
 
-from fastapi import APIRouter, HTTPException, status, Depends
-from pydantic import BaseModel, Field
-from app.domain.models import BotSession, MeetingStatus, BotStatus
+from fastapi import APIRouter, Query, status
 
-from app.bootstrap import create_bot_handler
-from app.application.bot_handler import BotHandler
-
-
-router = APIRouter(
-    prefix="/bot-sessions",
-    tags=["bot-sessions"],
+from app.api.dependencies import BotHandlerDep, SessionServiceDep
+from app.domain.models import BotSession
+from app.schemas.bot import (
+    CreateSessionRequest,
+    PlayAudioRequest,
+    SessionActionResponse,
+    SessionResponse,
 )
+from app.schemas.commands import ChatResponse, TranscriptResponse
+from app.schemas.status import SessionStatusResponse
+
+router = APIRouter(prefix="/bot-sessions", tags=["bot-sessions"])
 
 
-# Request/Response Models
-class SessionActionRequest(BaseModel):
-    """Base request for session actions."""
-    session_id: str = Field(..., min_length=1, description="The session/meeting ID")
+def _to_response(session: BotSession) -> SessionResponse:
+    return SessionResponse(
+        session_id=session.session_id,
+        meeting_id=session.meeting_id,
+        meeting_url=session.meeting_url,
+        meeting_status=session.meeting_status.value,
+        bot_status=session.bot_status.value,
+        recording_status=session.active_recording_status.value,
+        transcription_status=session.transcription_status.value,
+        last_error=session.last_error,
+        created_at=session.created_at,
+        started_at=session.started_at,
+        updated_at=session.updated_at,
+    )
 
 
-class SessionActionResponse(BaseModel):
-    """Base response for session actions."""
-    message: str
-    session_id: str
+@router.post(
+    "",
+    response_model=SessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a bot session",
+)
+async def create_session(
+    request: CreateSessionRequest,
+    handler: BotHandlerDep,
+    sessions: SessionServiceDep,
+) -> SessionResponse:
+    """Register a meeting and return the session id every later call uses.
+
+    No pod is claimed here. Set ``auto_start`` to dispatch immediately.
+    """
+    session = BotSession(
+        session_id=uuid.uuid4().hex,
+        meeting_id=request.meeting_id,
+        meeting_url=request.meeting_url,
+        scheduled_at=request.scheduled_at,
+        service_url=request.bot_service_url,
+        user_name=request.user_name,
+        user_email=request.user_email,
+        project_id=request.project_id,
+        project_name=request.project_name,
+        meeting_title=request.meeting_title,
+    )
+    created = await sessions.create_session(session)
+
+    if request.auto_start:
+        await handler.start_bot(created.session_id)
+        created = await sessions.require_session(created.session_id)
+
+    return _to_response(created)
 
 
-class SessionStatusResponse(BaseModel):
-    """Response for session status."""
-    session_id: str
-    status: dict
+@router.get("", response_model=list[SessionResponse], summary="List sessions")
+async def list_sessions(
+    sessions: SessionServiceDep,
+    active_only: bool = Query(default=False, description="Exclude finished sessions"),
+) -> list[SessionResponse]:
+    records = await sessions.list_sessions(active_only=active_only)
+    return [_to_response(record) for record in records]
 
 
-# Create session request/response
-class CreateSessionRequest(BaseModel):
-    meeting_id: str = Field(..., min_length=1)
-    meeting_url: str = Field(..., description="Google Meet URL")
-    scheduled_at: str | None = None
-    bot_service_url: str | None = Field(default=None, description="Target worker pod URL")
-    
-    # User and Project Context for Meeting Bot
-    user_name: str | None = Field(default=None, description="Display name for the bot")
-    user_email: str | None = Field(default=None, description="Recipient for ready notifications")
-    project_id: str | None = Field(default=None, description="Determines where recording is filed")
-    project_name: str | None = Field(default=None, description="Used in email notifications")
-    meeting_title: str | None = Field(default=None, description="Display name for the artifact")
-
-
-class CreateSessionResponse(BaseModel):
-    session_id: str
-    meeting_id: str
-    status: str
-    created_at: str | None = None
-
-
-def get_bot_handler() -> BotHandler:
-    """Dependency to get BotHandler instance."""
-    return create_bot_handler()
+@router.get("/{session_id}", response_model=SessionResponse, summary="Get session record")
+async def get_session(session_id: str, sessions: SessionServiceDep) -> SessionResponse:
+    """The durable record, read from storage without touching the pod."""
+    return _to_response(await sessions.require_session(session_id))
 
 
 @router.post(
@@ -76,76 +104,19 @@ def get_bot_handler() -> BotHandler:
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start a bot session",
 )
-async def start_session(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> SessionActionResponse:
-    """Start a bot session by joining a meeting.
-    
-    This endpoint initiates the bot joining the meeting specified by session_id.
+async def start_session(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    """Claim a bot pod and send it into the meeting.
+
+    Returns once a pod has accepted the join. Admission by the meeting host can
+    take minutes, so poll the session's status for the outcome.
     """
-    try:
-        await handler.start_bot(session_id)
-        return SessionActionResponse(
-            message="Session started successfully",
-            session_id=session_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start session: {str(e)}",
-        )
-
-
-@router.post(
-    "",
-    response_model=CreateSessionResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a bot session",
-)
-async def create_session(
-    request: CreateSessionRequest,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> CreateSessionResponse:
-    if handler._session_service is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Session service not configured",
-        )
-
-    session_id = uuid.uuid4().hex
-
-    # Initialize BotSession using explicit status fields
-    session = BotSession(
+    result = await handler.start_bot(session_id)
+    return SessionActionResponse(
+        message="Bot dispatch accepted",
         session_id=session_id,
-        meeting_id=request.meeting_id,
-        meeting_url=request.meeting_url,
-        service_url=request.bot_service_url,
-        user_name=request.user_name,
-        user_email=request.user_email,
-        project_id=request.project_id,
-        project_name=request.project_name,
-        meeting_title=request.meeting_title,
-        meeting_status=MeetingStatus.CREATED,
-        bot_status=BotStatus.PENDING,
-    )
-
-    created = await handler._session_service.create_session(session)
-    # TODO spinup the kubernates job
-    # TODO poll for job service startup status
-    # TODO hit meeting join api  
-    # Safely get status string
-    status_val = (
-        created.bot_status.value
-        if hasattr(created.bot_status, "value")
-        else str(created.bot_status)
-    )
-
-    return CreateSessionResponse(
-        session_id=created.session_id,
-        meeting_id=created.meeting_id,
-        status=status_val,
-        created_at=created.created_at.isoformat() if getattr(created, "created_at", None) else None,
+        meeting_status=result["meeting_status"],
+        bot_status=result["bot_status"],
+        detail=result.get("detail"),
     )
 
 
@@ -153,162 +124,143 @@ async def create_session(
     "/{session_id}/recording/start",
     response_model=SessionActionResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Start recording for a session",
+    summary="Start recording",
 )
-async def start_recording(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> SessionActionResponse:
-    """Start recording audio for a session.
-    
-    This endpoint begins capturing the meeting's audio for the specified session.
-    """
-    try:
-        await handler.start_recording(session_id)
-        return SessionActionResponse(
-            message="Recording started successfully",
-            session_id=session_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start recording: {str(e)}",
-        )
+async def start_recording(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    result = await handler.start_recording(session_id)
+    return SessionActionResponse(
+        message="Recording start accepted",
+        session_id=session_id,
+        recording_status=result["recording_status"],
+        recording_id=result.get("recording_id"),
+        detail=result.get("detail"),
+    )
 
 
 @router.post(
     "/{session_id}/recording/stop",
     response_model=SessionActionResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Stop recording for a session",
+    summary="Stop recording",
 )
-async def stop_recording(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> SessionActionResponse:
-    """Stop recording audio for a session.
-    
-    This endpoint stops capturing and finalizes the recording for the specified session.
+async def stop_recording(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    """Stop capturing and finalize the upload.
+
+    A 200 here means the recording is durable: the bot returns only once the
+    object is closed.
     """
-    try:
-        await handler.stop_recording(session_id)
-        return SessionActionResponse(
-            message="Recording stopped successfully",
-            session_id=session_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to stop recording: {str(e)}",
-        )
+    result = await handler.stop_recording(session_id)
+    return SessionActionResponse(
+        message="Recording stopped",
+        session_id=session_id,
+        recording_status=result["recording_status"],
+        detail=result.get("detail"),
+    )
 
 
 @router.post(
     "/{session_id}/transcription/start",
     response_model=SessionActionResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Start transcription for a session",
+    summary="Start transcription",
 )
-async def start_transcription(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> SessionActionResponse:
-    """Start transcription for a session.
-    
-    This endpoint begins producing a transcript for the specified session.
-    """
-    try:
-        await handler.start_transcription(session_id)
-        return SessionActionResponse(
-            message="Transcription started successfully",
-            session_id=session_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start transcription: {str(e)}",
-        )
+async def start_transcription(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    result = await handler.start_transcription(session_id)
+    return SessionActionResponse(
+        message="Transcription start accepted",
+        session_id=session_id,
+        transcription_status=result["transcription_status"],
+        detail=result.get("detail"),
+    )
 
 
 @router.post(
     "/{session_id}/transcription/stop",
     response_model=SessionActionResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Stop transcription for a session",
+    summary="Stop transcription",
 )
-async def stop_transcription(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> SessionActionResponse:
-    """Stop transcription for a session.
-    
-    This endpoint stops transcribing for the specified session.
-    """
-    try:
-        await handler.stop_transcription(session_id)
-        return SessionActionResponse(
-            message="Transcription stopped successfully",
-            session_id=session_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to stop transcription: {str(e)}",
-        )
+async def stop_transcription(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    result = await handler.stop_transcription(session_id)
+    return SessionActionResponse(
+        message="Transcription stopped",
+        session_id=session_id,
+        transcription_status=result["transcription_status"],
+        detail=result.get("detail"),
+    )
 
 
-@router.post(
-    "/{session_id}/leave",
-    response_model=SessionActionResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Leave a session",
+@router.get(
+    "/{session_id}/transcript",
+    response_model=TranscriptResponse,
+    summary="Get the transcript so far",
 )
-async def leave_session(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> SessionActionResponse:
-    """Leave a session/meeting.
-    
-    This endpoint causes the bot to leave the meeting for the specified session.
-    """
-    try:
-        await handler.leave(session_id)
-        return SessionActionResponse(
-            message="Session left successfully",
-            session_id=session_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to leave session: {str(e)}",
-        )
+async def get_transcript(
+    session_id: str, handler: BotHandlerDep, sessions: SessionServiceDep
+) -> TranscriptResponse:
+    session = await sessions.require_session(session_id)
+    payload = await handler.get_transcript(session_id)
+    return TranscriptResponse(
+        session_id=session_id,
+        meeting_id=session.meeting_id,
+        count=payload.get("count", 0),
+        segments=payload.get("segments", []),
+    )
 
 
-@router.post(
-    "/{session_id}/stop",
-    response_model=SessionActionResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Stop a session",
-)
-async def stop_session(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
+@router.get("/{session_id}/chat", response_model=ChatResponse, summary="Get chat messages")
+async def get_chat(
+    session_id: str, handler: BotHandlerDep, sessions: SessionServiceDep
+) -> ChatResponse:
+    session = await sessions.require_session(session_id)
+    payload = await handler.get_chat(session_id)
+    return ChatResponse(
+        session_id=session_id,
+        meeting_id=session.meeting_id,
+        count=payload.get("count", 0),
+        chat_segments=payload.get("chatSegments", []),
+    )
+
+
+@router.post("/{session_id}/audio/play", response_model=SessionActionResponse, summary="Play audio")
+async def play_audio(
+    session_id: str, request: PlayAudioRequest, handler: BotHandlerDep
 ) -> SessionActionResponse:
-    """Stop a session.
-    
-    This endpoint stops the session (equivalent to leaving the meeting).
-    """
-    try:
-        await handler.stop(session_id)
-        return SessionActionResponse(
-            message="Session stopped successfully",
-            session_id=session_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to stop session: {str(e)}",
-        )
+    detail = await handler.play_audio(session_id, request.audio_url, request.volume)
+    return SessionActionResponse(message="Audio played", session_id=session_id, detail=detail)
+
+
+@router.post("/{session_id}/audio/mute", response_model=SessionActionResponse, summary="Mute the bot")
+async def mute(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    detail = await handler.mute(session_id)
+    return SessionActionResponse(message="Bot muted", session_id=session_id, detail=detail)
+
+
+@router.post("/{session_id}/audio/unmute", response_model=SessionActionResponse, summary="Unmute the bot")
+async def unmute(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    detail = await handler.unmute(session_id)
+    return SessionActionResponse(message="Bot unmuted", session_id=session_id, detail=detail)
+
+
+@router.post("/{session_id}/leave", response_model=SessionActionResponse, summary="Leave the meeting")
+async def leave_session(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    """Leave the meeting and release the pod. Finalizes a running recording."""
+    result = await handler.leave(session_id)
+    return SessionActionResponse(
+        message="Left meeting",
+        session_id=session_id,
+        meeting_status=result["meeting_status"],
+        detail=result.get("detail"),
+    )
+
+
+@router.post("/{session_id}/stop", response_model=SessionActionResponse, summary="Stop the session")
+async def stop_session(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
+    result = await handler.stop(session_id)
+    return SessionActionResponse(
+        message="Session stopped",
+        session_id=session_id,
+        meeting_status=result["meeting_status"],
+        detail=result.get("detail"),
+    )
 
 
 @router.get(
@@ -318,45 +270,10 @@ async def stop_session(
 )
 async def get_session_status(
     session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
+    handler: BotHandlerDep,
+    include_runtime: bool = Query(
+        default=True, description="Also ask the pod what it is doing right now"
+    ),
 ) -> SessionStatusResponse:
-    """Get the status of a session.
-    
-    This endpoint retrieves the current status of the specified session from the bot service.
-    """
-    try:
-        status_data = await handler.get_status(session_id)
-        return SessionStatusResponse(
-            session_id=session_id,
-            status=status_data,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get session status: {str(e)}",
-        )
-
-
-@router.get(
-    "/{session_id}",
-    response_model=CreateSessionResponse,
-    summary="Get session record",
-)
-async def get_session(
-    session_id: str,
-    handler: BotHandler = Depends(get_bot_handler),
-) -> CreateSessionResponse:
-    """Return the persisted session record (durable state)."""
-    if handler._session_service is None:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Session service not configured")
-
-    session = await handler._session_service.get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
-
-    return CreateSessionResponse(
-        session_id=session.session_id,
-        meeting_id=session.meeting_id,
-        status=session.status.value,
-        created_at=session.created_at.isoformat() if session.created_at else None,
-    )
+    """Durable state, enriched with the pod's live view when it is reachable."""
+    return SessionStatusResponse(**await handler.get_status(session_id, include_runtime))

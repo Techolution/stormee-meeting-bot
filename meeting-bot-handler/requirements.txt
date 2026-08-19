@@ -5,5 +5,8 @@ pydantic-settings
 httpx
 redis
 kubernetes
+
+# Test-only. Kept here because there is no separate requirements-dev.txt yet;
+# the image installs them too, which is a small cost for one build path.
 pytest
 pytest-asyncio
