@@ -195,6 +195,7 @@ class CWUtilsClient(BaseHTTPClient):
         project_id: str,
         files: list[UploadedFile],
         is_ai: bool = False,
+        display_name: str = "",
         user_name: str = "",
         user_email: str = "",
         auto_ingest: bool = True,
@@ -218,6 +219,8 @@ class CWUtilsClient(BaseHTTPClient):
             payload["artifactUserName"] = user_name
         if user_email:
             payload["artifactUserEmail"] = user_email
+        if display_name:
+            payload["displayName"] = display_name
 
         result = await self.post_json(
             self._ENDPOINT_CONFIRM_UPLOAD,

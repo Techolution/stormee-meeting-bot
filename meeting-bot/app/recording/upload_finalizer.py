@@ -60,6 +60,7 @@ class UploadFinalizer:
                 project_id=context.project_id,
                 files=[uploaded],
                 is_ai=False,
+                display_name=context.meeting_title,
                 user_name=context.user_name,
                 user_email=context.user_email,
                 auto_ingest=True,
