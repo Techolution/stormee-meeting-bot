@@ -134,6 +134,36 @@ auth-profile: ## Sign in to Google once and persist the browser profile
 auth-profile-docker: ## Sign in to Google using Docker and persist the browser profile
 	$(SHELL) scripts/create_auth_profile_docker.sh
 
+.PHONY: test-gcs-profile
+test-gcs-profile: ## Test Chrome profile download from GCS locally
+	@if [ -z "$GCS_BUCKET" ] || [ -z "$GCS_OBJECT_PATH" ]; then \
+		echo "Error: GCS_BUCKET and GCS_OBJECT_PATH environment variables are required"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  export GCS_BUCKET=\"meeting-bot\""; \
+		echo "  export GCS_OBJECT_PATH=\"profiles/chrome_profile.tar.gz\""; \
+		echo "  make test-gcs-profile"; \
+		echo ""; \
+		echo "First, ensure you are authenticated: gcloud auth application-default login"; \
+		exit 1; \
+	fi
+	@$(SHELL) scripts/test_gcs_profile_download.sh
+
+.PHONY: test-gcs-profile-docker
+test-gcs-profile-docker: ## Test Chrome profile download from GCS using Docker (no local gcloud needed)
+	@if [ -z "$GCS_BUCKET" ] || [ -z "$GCS_OBJECT_PATH" ]; then \
+		echo "Error: GCS_BUCKET and GCS_OBJECT_PATH environment variables are required"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  export GCS_BUCKET=\"meeting-bot\""; \
+		echo "  export GCS_OBJECT_PATH=\"profiles/chrome_profile.tar.gz\""; \
+		echo "  make test-gcs-profile-docker"; \
+		echo ""; \
+		echo "First, ensure you are authenticated: gcloud auth application-default login"; \
+		exit 1; \
+	fi
+	@$(SHELL) scripts/test_gcs_profile_download_docker.sh
+
 .PHONY: clean
 clean: ## Remove build and test artefacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
