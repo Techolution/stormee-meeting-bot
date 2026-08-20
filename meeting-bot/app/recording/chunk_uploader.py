@@ -63,6 +63,18 @@ class ChunkUploader(ABC):
     def pending_count(self) -> int:
         """Chunks captured but not yet persisted."""
 
+    @abstractmethod
+    async def reinitialize(self, context: RecordingContext) -> None:
+        """Re-initialize the uploader for the next segment.
+        
+        Called after auto-uploading a segment, to prepare for the next segment.
+        For resumable uploads, this creates a fresh resumable URL.
+        For streaming, this resets any internal state.
+        
+        Args:
+            context: Recording context for the new segment.
+        """
+
     async def flush_buffered(self) -> int:
         """Retry anything held back. Called after the transport recovers.
 
@@ -226,18 +238,24 @@ class StreamingChunkUploader(ChunkUploader):
     def pending_count(self) -> int:
         return len(self._buffer)
 
+    async def reinitialize(self, context: RecordingContext) -> None:
+        """Re-initialize the uploader for the next segment.
+        
+        For streaming mode, re-initialization means resetting context
+        and clearing any internal state. The audio service will handle
+        creating new logical segments on the remote end.
+        """
+        self._context = context
+        # Buffer is preserved to handle any chunks that arrived during transition
+        
+        logger.info(
+            "Streaming uploader re-initialized for next segment",
+            extra={"meeting_id": context.meeting_id, "buffered_chunks": len(self._buffer)},
+        )
+
 
 class DirectChunkUploader(ChunkUploader):
-    """Uploads to object storage from this process using the resumable protocol.
-
-    Ordering and block sizing are enforced here:
-
-      * :class:`~app.recording.sequencer.ChunkSequencer` guarantees chunks are
-        concatenated in sequence.
-      * Bytes accumulate until a full 256 KiB block is available, because
-        storage rejects a short non-final block.
-      * The final flush declares the object's total size and closes it.
-    """
+    """Uploads to object storage from this process using the resumable protocol."""
 
     transport = "direct"
 
@@ -261,21 +279,18 @@ class DirectChunkUploader(ChunkUploader):
         self._target: ResumableUploadTarget | None = None
         self._state: ResumableUploadState | None = None
         self._pending_bytes = bytearray()
+        self._header_bytes: bytes | None = None
         self._failed = False
 
-        # The page delivers chunks through an exposed callback, and Playwright
-        # dispatches each call as its own task — so `upload` runs concurrently.
-        # Everything it touches is order-dependent: reserving the object must
-        # happen once, and bytes must reach storage at strictly increasing
-        # offsets. Without this lock two chunks arriving together each reserve
-        # their own object and the recording is split across both.
         self._lock = asyncio.Lock()
 
     async def start(self, context: RecordingContext) -> None:
         """Reserve the object and prepare sequencing."""
         self._context = context
-        self._sequencer = ChunkSequencer(meeting_id=context.meeting_id)
+        if self._sequencer is None:
+            self._sequencer = ChunkSequencer(meeting_id=context.meeting_id)
         self._pending_bytes.clear()
+        self._header_bytes = None
         self._failed = False
         logger.info(
             "Uploading recording directly to object storage",
@@ -283,11 +298,7 @@ class DirectChunkUploader(ChunkUploader):
         )
 
     async def _ensure_target(self) -> bool:
-        """Create the upload target on first use.
-
-        Deferred until the first chunk so a meeting that is never recorded does
-        not reserve an object.
-        """
+        """Create the upload target on first use."""
         if self._state is not None:
             return True
         if self._context is None:
@@ -325,12 +336,7 @@ class DirectChunkUploader(ChunkUploader):
         return True
 
     async def upload(self, chunk: AudioChunk) -> None:
-        """Sequence the chunk and upload any full blocks it completes.
-
-        Serialised: concurrent callers would otherwise reserve duplicate objects
-        and interleave their blocks, and the resumable protocol accepts bytes at
-        exactly one offset at a time.
-        """
+        """Sequence the chunk and upload any full blocks it completes."""
         async with self._lock:
             if self._failed or self._sequencer is None:
                 return
@@ -341,25 +347,17 @@ class DirectChunkUploader(ChunkUploader):
                 return
 
             for ready in self._sequencer.release_ready():
+                # Extract header from sequence 0 (the WebM EBML header is in the first chunk)
+                if ready.sequence == 0 and self._header_bytes is None:
+                    # Save Sequence 0 to serve as the header template
+                    self._header_bytes = bytes(ready.data)
+
                 self._pending_bytes.extend(ready.data)
 
             await self._upload_full_blocks()
 
     async def _upload_full_blocks(self) -> None:
-        """Send complete blocks, always holding at least one byte back.
-
-        The comparison is ``>`` rather than ``>=`` on purpose. Only the final
-        request may declare the object's total size, and a request that declares
-        it must carry data: a zero-length ``PUT`` with ``Content-Range:
-        bytes */TOTAL`` is a *status query* in the resumable protocol, which
-        answers 308 and leaves the object open rather than closing it.
-
-        Draining to exactly empty is therefore only safe if more data is coming,
-        and at finalize time none is. Retaining a byte guarantees the final block
-        is non-empty for any recording that captured anything at all — including
-        one whose length happens to be an exact multiple of the block size, which
-        is the case that used to fail.
-        """
+        """Send complete blocks, holding back unaligned trailing bytes."""
         assert self._state is not None
 
         while len(self._pending_bytes) > self._block_size:
@@ -372,8 +370,6 @@ class DirectChunkUploader(ChunkUploader):
                     meeting_id=self._context.meeting_id if self._context else "",
                 )
             except ChunkUploadError as error:
-                # Leave the bytes in place: the resumable protocol requires this
-                # exact block at this exact offset, so the retry must be identical.
                 logger.error("Block upload failed; will retry on the next chunk", extra={"reason": str(error)})
                 return
 
@@ -382,12 +378,7 @@ class DirectChunkUploader(ChunkUploader):
             self._stats.bytes_uploaded = self._state.uploaded_bytes
 
     async def finalize(self) -> UploadOutcome:
-        """Flush remaining bytes as the final block and close the object.
-
-        Takes the same lock as :meth:`upload`: a chunk still in flight when the
-        recorder stops would otherwise append to the buffer after the final
-        block had been sent, and the object is closed by then.
-        """
+        """Flush remaining bytes as the final block and close the object."""
         async with self._lock:
             return await self._finalize_locked()
 
@@ -398,16 +389,15 @@ class DirectChunkUploader(ChunkUploader):
                 detail="upload was never initialised" if not self._failed else "upload target unavailable",
             )
 
-        # Anything still held for ordering has to go out now; nothing more is coming.
         for chunk in self._sequencer.release_all():
+            if chunk.sequence == 0 and self._header_bytes is None:
+                self._header_bytes = bytes(chunk.data)
             self._pending_bytes.extend(chunk.data)
 
         await self._upload_full_blocks()
 
         meeting_id = self._context.meeting_id if self._context else ""
 
-        # Nothing was ever captured. There is no object to close, and a
-        # zero-length finalize would be a status query rather than a finalize.
         if not self._pending_bytes and self._state.uploaded_bytes == 0:
             logger.warning(
                 "Recording produced no audio; nothing to finalize",
@@ -435,6 +425,7 @@ class DirectChunkUploader(ChunkUploader):
                 detail=str(error),
             )
 
+        # Clear buffer completely after finalizing segment
         self._pending_bytes.clear()
         self._stats.bytes_uploaded = self._state.uploaded_bytes
 
@@ -458,12 +449,34 @@ class DirectChunkUploader(ChunkUploader):
     def pending_count(self) -> int:
         return self._sequencer.pending_count if self._sequencer else 0
 
+    async def reinitialize(self, context: RecordingContext) -> None:
+        """Re-initialize the uploader for the next segment."""
+        self._context = context
+        async with self._lock:
+            # 1. Reset upload target and state so a new object URL is generated on next chunk
+            self._target = None
+            self._state = None
+            self._failed = False
 
+            # 2. CLEAR pending bytes from previous segment so audio is NOT duplicated
+            self._pending_bytes.clear()
+
+            # 3. Inject ONLY the WebM header bytes so the new segment starts as a valid file
+            if self._header_bytes is not None:
+                self._pending_bytes.extend(self._header_bytes)
+
+        logger.info(
+            "Uploader re-initialized for next segment (Buffer reset + WebM header injected)",
+            extra={"meeting_id": context.meeting_id},
+        )
+
+    
 def _object_name(meeting_id: str) -> str:
     """Build a collision-free object name for a recording.
 
     The meeting id alone is not safe: it can contain path separators, and a
     meeting recorded twice would otherwise overwrite its first recording.
+    Display names are handled separately via the CW API's display_name parameter.
     """
     safe = meeting_id.replace("/", "_").replace(":", "_").strip() or "meeting"
     return f"{safe}_{uuid.uuid4()}.webm"

@@ -309,8 +309,16 @@ class MeetingSession:
     # Recording
     # ------------------------------------------------------------------
 
-    async def start_recording(self) -> None:
+    async def start_recording(
+        self,
+        max_duration_seconds: int | None = None,
+        generate_incremental_highlights: bool = False,
+    ) -> None:
         """Begin recording meeting audio.
+
+        Args:
+            max_duration_seconds: Optional maximum duration before auto-uploading segment.
+            generate_incremental_highlights: Whether to request highlights for segments.
 
         Raises:
             RecordingAlreadyActiveError: If a recording is already running.
@@ -325,7 +333,10 @@ class MeetingSession:
             assert self._platform is not None, "cannot record before joining"
 
             self._state.recording.set(ComponentState.STARTING)
-            self._recorder = self._build_recorder()
+            self._recorder = self._build_recorder(
+                max_duration_seconds=max_duration_seconds,
+                generate_incremental_highlights=generate_incremental_highlights,
+            )
 
             try:
                 await self._recorder.start()
@@ -339,8 +350,17 @@ class MeetingSession:
                 {"transport": self._recorder.transport},
             )
 
-    def _build_recorder(self) -> Recorder:
-        """Assemble the recording pipeline for the configured transport."""
+    def _build_recorder(
+        self,
+        max_duration_seconds: int | None = None,
+        generate_incremental_highlights: bool = False,
+    ) -> Recorder:
+        """Assemble the recording pipeline for the configured transport.
+
+        Args:
+            max_duration_seconds: Optional maximum duration before auto-uploading segment.
+            generate_incremental_highlights: Whether to request highlights for segments.
+        """
         assert self._platform is not None
         stats = RecordingStats()
         uploader = self._build_uploader(stats)
@@ -352,9 +372,12 @@ class MeetingSession:
             finalizer=UploadFinalizer(
                 cw_client=self._deps.cw_client,
                 mail_client=self._deps.mail_client,
+                highlights_manager=self._deps.highlights_manager,
             ),
             chunk_duration_ms=self._settings.recording.chunk_duration_ms,
             finalize_grace_period_seconds=self._settings.recording.finalize_grace_period_seconds,
+            max_duration_seconds=max_duration_seconds,
+            generate_incremental_highlights=generate_incremental_highlights,
         )
 
     def _build_uploader(self, stats: RecordingStats) -> ChunkUploader:

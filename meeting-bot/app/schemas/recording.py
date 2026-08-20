@@ -8,9 +8,24 @@ from app.schemas.common import CamelCaseModel
 
 
 class StartRecordingRequest(CamelCaseModel):
-    """Begin capturing meeting audio."""
+    """Begin capturing meeting audio.
+
+    Supports incremental segment recording with automatic upload and highlights
+    generation at specified duration intervals.
+    """
 
     meeting_id: str = Field(..., alias="meetingId", min_length=1)
+    max_duration_seconds: int | None = Field(
+        default=None,
+        alias="maxDurationSeconds",
+        gt=0,
+        description="Optional: Automatically stop recording and upload this segment after this duration. The remaining audio after all segments is uploaded at meeting end.",
+    )
+    generate_incremental_highlights: bool = Field(
+        default=False,
+        alias="generateIncrementalHighlights",
+        description="If true, request highlights for each segment when max_duration_seconds is set.",
+    )
 
 
 class StopRecordingRequest(CamelCaseModel):
