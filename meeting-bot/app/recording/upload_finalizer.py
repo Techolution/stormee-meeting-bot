@@ -74,6 +74,12 @@ class UploadFinalizer:
                 "Skipping upload finalization",
                 extra={"meeting_id": context.meeting_id, "reason": skip_reason},
             )
+            # A meeting that ends on a segment boundary leaves a final segment
+            # with nothing in it. There is no file to register, but the earlier
+            # parts did upload and the recording *is* finished, so the person
+            # waiting to hear that still needs telling.
+            if is_final_segment and segment_number > 1 and context.project_id:
+                await self._notify_user(context)
             return False
 
         assert outcome.public_url is not None and context.project_id is not None

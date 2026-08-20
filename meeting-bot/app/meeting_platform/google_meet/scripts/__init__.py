@@ -13,7 +13,8 @@ Layout:
                          code calls ``getUserMedia``.
   ``stealth.js``         Hides ``navigator.webdriver``. Also an init script.
   ``recorder_start.js``  Starts a ``MediaRecorder`` over the mixed audio graph
-                         and pushes chunks to Python. Called with a meeting id.
+                         and pushes chunks to Python. Called with a meeting id
+                         and the timeslice to chunk at.
   ``recorder_stop.js``   Stops the recorder and flushes the final chunk.
 """
 
@@ -50,7 +51,7 @@ def stealth() -> str:
 
 
 def recorder_start() -> str:
-    """Page function ``async (meetingId) => …`` that starts recording."""
+    """Page function ``async ({meetingId, chunkDurationMs}) => …`` that starts recording."""
     return load_script("recorder_start.js")
 
 

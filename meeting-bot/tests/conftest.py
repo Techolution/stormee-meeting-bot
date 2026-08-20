@@ -8,6 +8,7 @@ every collaborator it reaches is an abstraction with a test double.
 from __future__ import annotations
 
 import asyncio
+import struct
 from datetime import datetime, timezone
 from typing import Any
 
@@ -261,6 +262,17 @@ class FakeCWClient:
         return f"https://cw.test.invalid/projects/{project_id}"
 
 
+class FakeMailClient:
+    """Stands in for :class:`~app.clients.mail.MailClient`."""
+
+    def __init__(self, *, enabled: bool = True) -> None:
+        self.enabled = enabled
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_meeting_file_uploaded(self, **kwargs: Any) -> None:
+        self.sent.append(kwargs)
+
+
 class FakeStorage:
     """Stands in for the resumable-upload client, recording each block."""
 
@@ -338,3 +350,141 @@ async def wait_for(condition, *, timeout: float = 2.0, interval: float = 0.01) -
             return True
         await asyncio.sleep(interval)
     return condition()
+
+
+# --------------------------------------------------------------------------
+# WebM builders
+# --------------------------------------------------------------------------
+#
+# The recording pipeline re-frames a live WebM stream, so testing it needs
+# bytes shaped like the ones Chrome's MediaRecorder actually produces: a
+# ``Segment`` and ``Cluster``s written with unknown sizes, and audio carried in
+# ``SimpleBlock``s whose timestamps are offsets from their cluster.
+#
+# ``read_webm`` is the inverse, and doubles as a validity check: a segment that
+# does not parse raises here rather than failing an assertion further down.
+
+_UNKNOWN_SIZE = b"\x01\xff\xff\xff\xff\xff\xff\xff"
+_CLUSTER_ID = b"\x1f\x43\xb6\x75"
+_TIMECODE_ID = b"\xe7"
+_SIMPLE_BLOCK_ID = b"\xa3"
+
+
+def _ebml_size(size: int) -> bytes:
+    for length in range(1, 9):
+        if size < (1 << (7 * length)) - 1:
+            return (size | (1 << (7 * length))).to_bytes(length, "big")
+    raise ValueError(f"size {size} does not fit an EBML vint")
+
+
+def _ebml_element(element_id: bytes, payload: bytes) -> bytes:
+    return element_id + _ebml_size(len(payload)) + payload
+
+
+def webm_init_bytes() -> bytes:
+    """The initialisation data every playable WebM file has to start with."""
+    return (
+        _ebml_element(b"\x1a\x45\xdf\xa3", b"\x42\x86\x81\x01")  # EBML header
+        + b"\x18\x53\x80\x67"  # Segment, left open the way a live writer does
+        + _UNKNOWN_SIZE
+        + _ebml_element(b"\x15\x49\xa9\x66", b"\x2a\xd7\xb1\x83\x0f\x42\x40")  # Info
+        + _ebml_element(b"\x16\x54\xae\x6b", b"\xae\x83\xd7\x81\x01")  # Tracks
+    )
+
+
+def make_webm_stream(
+    clusters: list[tuple[int, list[int]]],
+    *,
+    known_cluster_sizes: bool = False,
+) -> bytes:
+    """Build a live WebM stream.
+
+    Args:
+        clusters: One ``(cluster_timecode, [block_timestamp, ...])`` pair per
+            cluster, all in absolute milliseconds. Every block gets a payload
+            derived from its timestamp, so a test can tell which blocks came
+            out the other end.
+        known_cluster_sizes: Write clusters with a declared length instead of
+            the unknown size Chrome uses. Both are legal and the parser has to
+            handle each.
+    """
+    stream = bytearray(webm_init_bytes())
+    for timecode, timestamps in clusters:
+        body = bytearray(_ebml_element(_TIMECODE_ID, _unsigned(timecode)))
+        for timestamp in timestamps:
+            offset = timestamp - timecode
+            payload = b"\x81" + struct.pack(">h", offset) + b"\x80" + _block_payload(timestamp)
+            body.extend(_ebml_element(_SIMPLE_BLOCK_ID, payload))
+        if known_cluster_sizes:
+            stream.extend(_CLUSTER_ID + _ebml_size(len(body)) + body)
+        else:
+            stream.extend(_CLUSTER_ID + _UNKNOWN_SIZE + body)
+    return bytes(stream)
+
+
+def read_webm(data: bytes) -> tuple[bytes, list[tuple[int, bytes]]]:
+    """Split a WebM file into its init bytes and its audio blocks.
+
+    Returns:
+        ``(init_bytes, [(absolute_timestamp, payload), ...])``.
+
+    Raises:
+        ValueError: If the bytes are not a well-formed WebM file. Segments are
+            supposed to be playable on their own, so failing to parse one is a
+            test failure worth reporting as an error rather than a mismatch.
+    """
+    position, limit = 0, len(data)
+    init_end = None
+    timecode = 0
+    blocks: list[tuple[int, bytes]] = []
+
+    while position < limit:
+        element_id, size, header = _read_header(data, position)
+        payload_start = position + header
+
+        if element_id == 0x18538067:  # Segment: descend rather than skip
+            position = payload_start
+            continue
+        if element_id == 0x1F43B675:  # Cluster
+            if init_end is None:
+                init_end = position
+            position = payload_start
+            continue
+        if size is None:
+            raise ValueError(f"unknown size on element {element_id:#x} at {position}")
+        if element_id == 0xE7:
+            timecode = int.from_bytes(data[payload_start : payload_start + size], "big")
+        elif element_id == 0xA3:
+            offset = struct.unpack_from(">h", data, payload_start + 1)[0]
+            blocks.append((timecode + offset, data[payload_start + 4 : payload_start + size]))
+        position = payload_start + size
+
+    if init_end is None:
+        raise ValueError("file contains no cluster, so it carries no audio")
+    return data[:init_end], blocks
+
+
+def _block_payload(timestamp: int) -> bytes:
+    return b"audio-" + timestamp.to_bytes(4, "big")
+
+
+def _unsigned(value: int) -> bytes:
+    return value.to_bytes(max((value.bit_length() + 7) // 8, 1), "big")
+
+
+def _read_header(data: bytes, position: int) -> tuple[int, int | None, int]:
+    id_length = _vint_length(data[position])
+    element_id = int.from_bytes(data[position : position + id_length], "big")
+    size_start = position + id_length
+    size_length = _vint_length(data[size_start])
+    raw = int.from_bytes(data[size_start : size_start + size_length], "big")
+    value = raw & ((1 << (7 * size_length)) - 1)
+    unknown = value == (1 << (7 * size_length)) - 1
+    return element_id, (None if unknown else value), id_length + size_length
+
+
+def _vint_length(first_byte: int) -> int:
+    for length in range(1, 9):
+        if first_byte & (0x80 >> (length - 1)):
+            return length
+    raise ValueError(f"invalid variable-size integer prefix {first_byte:#x}")

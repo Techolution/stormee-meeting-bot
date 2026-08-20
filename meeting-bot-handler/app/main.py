@@ -2,13 +2,33 @@
 
 Startup builds the container — HTTP client, Kubernetes client, session store —
 and shutdown tears it down. Nothing with a lifetime is created per request.
+
+Runnable four ways, all equivalent:
+
+    uvicorn app.main:app        production
+    make run                    development, with reload
+    python -m app.main
+    python app/main.py
 """
 
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
+
+if __package__ in (None, ""):
+    # Running this file as a script puts `app/` on sys.path rather than the
+    # project root. `import app.…` below then finds no local package and falls
+    # through to whatever else claims the name `app` — which, in an environment
+    # where the bot worker is installed, is the *bot's* package rather than
+    # this one, and the failure reads as a missing attribute rather than a
+    # missing path. Adding the root keeps `python app/main.py` honest; the `-m`
+    # and uvicorn entry points already have the root on the path.
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI
 
@@ -70,4 +90,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
+#: ASGI application. Served with `uvicorn app.main:app`.
 app = create_app()
+
+
+def main() -> None:
+    """Run the service directly, for local development.
+
+    Production uses `uvicorn app.main:app` so the server is configured by the
+    deployment rather than by this file.
+    """
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(
+        "app.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.environment != "production",
+        # Watch source only: the reloader walking the whole project turns every
+        # incidental file into a restart.
+        reload_dirs=[str(Path(__file__).resolve().parent)],
+        log_config=None,  # logging is already configured by create_app
+    )
+
+
+if __name__ == "__main__":
+    main()

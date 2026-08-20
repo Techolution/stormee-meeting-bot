@@ -2,6 +2,35 @@
 
 This document describes how automatic segment uploads and incremental highlights work during recording.
 
+## Container Framing: Why Each Segment Is Playable
+
+`MediaRecorder` does not produce a sequence of files. It produces one WebM
+stream, sliced into blobs, and only the first blob carries the EBML header,
+`Info` and `Tracks` that a decoder needs. Uploading raw slices of that stream
+therefore yields one playable object and N unplayable ones.
+
+Three properties of Chrome's real output rule out the simpler fixes:
+
+| Observed | Consequence |
+| --- | --- |
+| Blob boundaries land *inside* elements — between a `SimpleBlock`'s id byte and its size | A blob is not a unit of anything; parsing must be byte-continuous |
+| Chrome opens a new `Cluster` only every ~30 s | Cutting on input cluster boundaries cannot honour a shorter segment target |
+| `Segment` and `Cluster` are both written with unknown sizes | Cut points are invisible without a real EBML parse |
+
+Re-using the first blob as a "header" for later segments does not work either:
+that blob is header *plus* the opening seconds of the meeting, so every later
+segment replays those seconds and still carries blocks timestamped from the
+meeting's start rather than its own.
+
+`app/recording/webm_segmenter.py` handles this by **remuxing** the stream:
+Opus blocks are parsed out and copied verbatim into clusters it writes itself,
+so each segment begins with the initialisation header and a timeline that
+starts at zero. Nothing is re-encoded, dropped or duplicated — bytes that do
+not yet form a complete element stay buffered and roll into the next segment.
+
+`DirectChunkUploader` feeds every byte through it, so a recording that is never
+split takes exactly the same path as one that is.
+
 ## Architecture
 
 ### Duration Monitoring in Recorder
@@ -15,14 +44,21 @@ The `Recorder` class monitors recording duration in real-time and automatically 
    - `_last_segment_upload_duration`: Records the duration when the last segment was uploaded (starts at 0)
 
 2. **Duration Monitoring** (in `Recorder._on_chunk()`):
-   - After each chunk is uploaded, check if: `duration >= (last_upload_duration + max_duration_seconds)`
-   - If threshold reached, call `_trigger_segment_upload()`
+   - After each chunk is uploaded, check `Recorder._segment_elapsed_seconds()`
+     against `max_duration_seconds`
+   - That figure is **media time** — read from the timestamps the encoder wrote
+     — whenever the uploader can report it, so a stalled capture does not
+     advance it the way a wall clock would. Transports that forward opaque
+     bytes return `None` and the wall clock is used instead
+   - If the threshold is reached, call `_trigger_segment_upload()`
+   - Segment length is quantised to the chunk duration, since the check only
+     runs once a whole chunk has arrived
 
 3. **Segment Upload Trigger** (new method `Recorder._trigger_segment_upload()`):
    - Finalizes current uploader (closes resumable URL)
    - Calls `UploadFinalizer.finalize()` with `is_final_segment=False`
    - Updates tracking: `last_upload_duration = current_duration`, `segment_number += 1`
-   - Creates new uploader for next segment (TODO: requires uploader re-initialization)
+   - Re-points the uploader at a fresh object for the next segment
 
 4. **Final Segment** (updated `Recorder.stop()`):
    - Finalizes remaining audio accumulated since last auto-upload
@@ -52,7 +88,7 @@ Start Recording (maxDurationSeconds=1800)
 │        ├─ Finalize Uploader 1 (close resumable URL)
 │        ├─ Call finalizer.finalize(..., is_final_segment=False, segment_number=1)
 │        ├─ Update: last_upload_duration=1800, segment_number=2
-│        └─ Create Uploader 2 for next segment (TODO)
+│        └─ Re-point uploader at a new object for segment 2
 │
 ├─ Chunks: 1800-2400s accumulated (40 min)
 │  │
@@ -66,7 +102,7 @@ Start Recording (maxDurationSeconds=1800)
 │        ├─ Finalize Uploader 2 (close resumable URL)
 │        ├─ Call finalizer.finalize(..., is_final_segment=False, segment_number=2)
 │        ├─ Update: last_upload_duration=3600, segment_number=3
-│        └─ Create Uploader 3 for next segment (TODO)
+│        └─ Re-point uploader at a new object for segment 3
 │
 ├─ Chunks: 3600-3900s accumulated (65 min)
 │  │
@@ -131,11 +167,14 @@ When the final segment (remaining audio) is uploaded:
   - [x] StreamingChunkUploader.reinitialize(): Updates context for remote segmentation
   - [x] Recorder._trigger_segment_upload() calls uploader.reinitialize()
 
+- [x] Container framing: every segment is a standalone, playable WebM file
+  - [x] `WebMSegmenter` remuxes the live stream, rebasing each segment to zero
+  - [x] `DirectChunkUploader` cuts the segment as part of `finalize()`
+  - [x] Verified against a real Chrome capture: segments decode and play in
+        Chrome, and the audio across them matches the unsplit recording
+        sample for sample
+
 ### ⏳ TODO
-- [ ] Testing: Validate segment uploads work correctly with multiple segments
-  - End-to-end tests with maxDurationSeconds set
-  - Verify each segment uploads independently
-  - Verify highlights generated per segment
 - [ ] Monitoring: Add metrics for segment upload latency, success rates
   - Track time between auto-uploads
   - Monitor per-segment upload success
@@ -153,7 +192,7 @@ self._segment_upload_in_progress = False  # Guard flag
 if (
     not self._segment_upload_in_progress  # Check guard first
     and self._max_duration_seconds
-    and self._stats.duration_seconds >= (self._last_segment_upload_duration + self._max_duration_seconds)
+    and self._segment_elapsed_seconds() >= self._max_duration_seconds
 ):
     self._segment_upload_in_progress = True
     try:
@@ -179,19 +218,25 @@ For direct uploads to object storage:
 
 ```python
 async def reinitialize(self, context: RecordingContext) -> None:
-    # Clear upload state to force new resumable URL creation
+    # Only the upload is reset; the segmenter keeps reading the same stream.
+    self._uploaded_base += self._state.uploaded_bytes  # keep the byte count honest
     self._target = None      # Remove old upload target
     self._state = None       # Clear resumable state
-    self._pending_bytes.clear()  # Clear pending data
     self._failed = False     # Reset error flag
 ```
 
 How it works:
-1. When next chunk arrives, `_ensure_target()` is called
-2. `_ensure_target()` sees `self._state is None` and creates a new resumable URL
-3. New URL returned from CW API is stored in `self._state`
-4. Chunks continue uploading to the new URL
-5. Sequencer is preserved to maintain chunk ordering across segments
+1. When the next chunk arrives, `_ensure_target()` creates a new resumable URL
+2. Chunks continue uploading to the new URL
+3. The sequencer is preserved, maintaining chunk ordering across segments
+4. The **segmenter** is preserved too, which is what makes the next object a
+   file rather than a continuation: `finalize()` already ended the previous
+   segment on it, so the next bytes it emits start with the stream header and
+   a timeline of their own
+5. Pending bytes are *not* cleared here. Anything still pending arrived after
+   the cut — from a chunk that raced finalization — and so already belongs to
+   the new segment. `finalize()` is what clears bytes belonging to the object
+   it closed
 
 ### StreamingChunkUploader Re-initialization
 
@@ -236,6 +281,8 @@ Note: Re-initialization happens inside `_on_chunk()` which is called asynchronou
 ## Code References
 
 **Files Modified:**
+- `meeting-bot/app/recording/webm_segmenter.py`: Re-frames the live WebM stream
+  so each segment is a standalone file
 - `meeting-bot/app/recording/recorder.py`: Duration monitoring and segment tracking
 - `meeting-bot/app/recording/chunk_uploader.py`: Re-initialization implementations
 - `meeting-bot/app/recording/upload_finalizer.py`: Segment vs final handling
@@ -243,6 +290,8 @@ Note: Re-initialization happens inside `_on_chunk()` which is called asynchronou
 - `meeting-bot/app/api/routes/recording.py`: API endpoint
 
 **Key Methods:**
+- `WebMSegmenter.feed()` / `.drain()` / `.cut()`: Stream re-framing
+- `Recorder._segment_elapsed_seconds()`: Media time for the current segment
 - `Recorder._on_chunk()`: Duration monitoring
 - `Recorder._trigger_segment_upload()`: Segment upload orchestration
 - `Recorder.stop()`: Final segment handling
@@ -250,17 +299,14 @@ Note: Re-initialization happens inside `_on_chunk()` which is called asynchronou
 
 ## Next Steps
 
-1. **Implement Uploader Re-initialization**
-   - Design method for creating new resumable URLs mid-recording
-   - Handle state transfer between uploaders
-   - Test with DirectChunkUploader and StreamingChunkUploader
+1. **Streaming transport**
+   - Segments in `websocket` mode are the audio service's concern: this process
+     forwards raw chunks and the service owns object creation, so the framing
+     fix here does not reach them
+   - `StreamingChunkUploader.segment_duration_seconds()` returns `None`, so cuts
+     in that mode still fall back to the wall clock
 
-2. **Testing**
-   - Unit tests for segment monitoring logic
-   - Integration tests with actual recordings
-   - Edge cases: early stops, no max_duration_seconds, etc.
-
-3. **Monitoring & Observability**
+2. **Monitoring & Observability**
    - Track segment upload latencies
    - Monitor success/failure rates per segment
    - Alert on excessively long segments

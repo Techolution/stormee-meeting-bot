@@ -61,6 +61,18 @@ curl -X POST http://localhost:8000/api/meetings/join \
 
 Duration-based uploads enable incremental processing of long-running meetings. When you start recording, you can specify a maximum duration. The recording automatically uploads and generates highlights for that segment when the duration is reached, without stopping the meeting. You can then continue recording, which will upload the remaining audio when the meeting ends.
 
+Every segment is a **standalone audio file**: it carries its own WebM header and
+its own timeline starting at zero, so it plays on its own rather than only as a
+continuation of the one before it. Segment boundaries are measured in media
+time — the audio actually captured — and land on audio frame boundaries, so no
+audio is lost or duplicated where one segment ends and the next begins. See
+[SEGMENT_UPLOAD_IMPLEMENTATION.md](SEGMENT_UPLOAD_IMPLEMENTATION.md) for how
+the stream is re-framed.
+
+Segment length is rounded up to the next chunk boundary (`RECORDING_CHUNK_DURATION_MS`,
+5 s by default), so a 10-second target produces segments of about 10 seconds,
+not exactly 10.
+
 ### Use Cases
 
 1. **Long Meetings**: For meetings longer than 1-2 hours, breaking them into segments improves upload reliability

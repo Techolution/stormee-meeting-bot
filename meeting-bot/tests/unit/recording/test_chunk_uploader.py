@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
 from app.core.exceptions import ChunkUploadError
 from app.recording.audio_buffer import AudioBuffer
 from app.recording.chunk_uploader import DirectChunkUploader, StreamingChunkUploader
-from app.recording.models import RecordingContext, RecordingStats
-from tests.conftest import FakeAudioService, FakeCWClient, FakeStorage, make_chunk
+from app.recording.models import AudioChunk, RecordingContext, RecordingStats
+from tests.conftest import (
+    FakeAudioService,
+    FakeCWClient,
+    FakeStorage,
+    make_chunk,
+    make_webm_stream,
+    read_webm,
+    webm_init_bytes,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -217,16 +226,45 @@ async def test_direct_upload_reports_failure_when_storage_rejects_the_final_bloc
     """An incomplete upload must never be reported as complete."""
     storage = FakeStorage()
     uploader = DirectChunkUploader(
-        cw_client=FakeCWClient(), storage=storage, stats=RecordingStats()
+        cw_client=FakeCWClient(),
+        storage=storage,
+        stats=RecordingStats(),
+        final_block_retry_seconds=0,
     )
     await uploader.start(context)
     await uploader.upload(make_chunk(0, size=100))
 
-    storage.fail_next = 1
+    storage.fail_next = 3  # storage refuses every attempt, not just the first
     outcome = await uploader.finalize()
 
     assert outcome.complete is False
     assert outcome.detail
+
+
+async def test_a_refused_final_block_is_retried_rather_than_losing_the_segment(
+    context: RecordingContext,
+) -> None:
+    """Every other block gets a free retry on the next chunk. This one does not.
+
+    Without retrying here, a single refused request costs everything captured
+    since the last accepted block, which on a 15-minute segment is minutes of
+    audio thrown away over a momentary network fault.
+    """
+    storage = FakeStorage()
+    uploader = DirectChunkUploader(
+        cw_client=FakeCWClient(),
+        storage=storage,
+        stats=RecordingStats(),
+        final_block_retry_seconds=0,
+    )
+    await uploader.start(context)
+    await uploader.upload(make_chunk(0, size=100))
+
+    storage.fail_next = 2  # two transient refusals, then storage recovers
+    outcome = await uploader.finalize()
+
+    assert outcome.complete is True
+    assert bytes(storage.data) == bytes([0]) * 100, "the audio still has to arrive"
 
 
 async def test_direct_upload_degrades_when_no_upload_target_can_be_created(
@@ -452,3 +490,121 @@ async def test_reinitialize_preserves_bytes_during_concurrent_upload(
     assert bytes(storage.data) == expected
     assert outcome_first.complete is True or outcome_first.complete is False
     assert outcome_second.complete is True
+
+
+# --------------------------------------------------------------------------
+# Segments as standalone files
+# --------------------------------------------------------------------------
+
+
+class SegmentStorage:
+    """Storage that keeps each segment's object separate.
+
+    :class:`~tests.conftest.FakeStorage` concatenates everything it is given,
+    which is the right shape for asking "did these bytes arrive". Here the
+    question is "is each object a file", so the objects have to stay apart.
+    """
+
+    def __init__(self) -> None:
+        self._objects: dict[str, bytearray] = {}
+        self._order: list[str] = []
+
+    async def upload_block(self, state: Any, data: bytes, *, is_final: bool, meeting_id: str = "") -> None:
+        if state.upload_url not in self._objects:
+            self._objects[state.upload_url] = bytearray()
+            self._order.append(state.upload_url)
+        self._objects[state.upload_url].extend(data)
+        state.uploaded_bytes += len(data)
+        state.block_count += 1
+        if is_final:
+            state.completed = True
+
+    @property
+    def files(self) -> list[bytes]:
+        return [bytes(self._objects[url]) for url in self._order]
+
+
+def _webm_chunks(stream: bytes, count: int) -> list[AudioChunk]:
+    """Slice a stream the way the page delivers it: on no boundary in particular."""
+    step = len(stream) // count + 1
+    return [
+        AudioChunk(
+            meeting_id="meeting-1",
+            chunk_id=f"meeting-1-{sequence}",
+            data=stream[offset : offset + step],
+            sequence=sequence,
+            project_id="project-test",
+        )
+        for sequence, offset in enumerate(range(0, len(stream), step))
+    ]
+
+
+async def test_each_uploaded_segment_is_a_file_of_its_own(context: RecordingContext) -> None:
+    """The whole point of segmenting: every object has to play by itself.
+
+    Uploading raw slices of one stream leaves the first object playable and the
+    rest headerless, which is what this asserts against.
+    """
+    stream = make_webm_stream([(0, [index * 100 for index in range(60)])])
+    storage = SegmentStorage()
+    uploader = DirectChunkUploader(cw_client=FakeCWClient(), storage=storage, stats=RecordingStats())
+    await uploader.start(context)
+
+    chunks = _webm_chunks(stream, 6)
+    for chunk in chunks[:3]:
+        await uploader.upload(chunk)
+    first = await uploader.finalize()
+
+    await uploader.reinitialize(context)
+    for chunk in chunks[3:]:
+        await uploader.upload(chunk)
+    second = await uploader.finalize()
+
+    assert first.complete is True
+    assert second.complete is True
+    assert len(storage.files) == 2
+
+    recovered: list[bytes] = []
+    for file in storage.files:
+        init, blocks = read_webm(file)
+        assert init == webm_init_bytes()
+        assert blocks[0][0] == 0, "each segment has to start its own timeline"
+        recovered.extend(payload for _, payload in blocks)
+
+    assert recovered == [payload for _, payload in read_webm(stream)[1]], (
+        "every block must survive the cut, exactly once"
+    )
+
+
+async def test_the_segment_boundary_follows_captured_audio(context: RecordingContext) -> None:
+    """A segment is measured by what it contains, not by how long the bot has sat there."""
+    uploader = DirectChunkUploader(
+        cw_client=FakeCWClient(), storage=SegmentStorage(), stats=RecordingStats()
+    )
+    await uploader.start(context)
+    assert uploader.segment_duration_seconds() == 0.0
+
+    stream = make_webm_stream([(0, [index * 1_000 for index in range(30)])])
+    for chunk in _webm_chunks(stream, 3):
+        await uploader.upload(chunk)
+
+    assert uploader.segment_duration_seconds() == 30.0
+
+    await uploader.finalize()
+    await uploader.reinitialize(context)
+    assert uploader.segment_duration_seconds() == 0.0
+
+
+async def test_an_unparseable_stream_still_reaches_storage(context: RecordingContext) -> None:
+    """Bytes the segmenter cannot read are uploaded rather than dropped."""
+    storage = SegmentStorage()
+    uploader = DirectChunkUploader(cw_client=FakeCWClient(), storage=storage, stats=RecordingStats())
+    await uploader.start(context)
+
+    await uploader.upload(make_chunk(0, size=64))
+    outcome = await uploader.finalize()
+
+    assert outcome.complete is True
+    assert storage.files == [bytes([0]) * 64]
+    # Nothing to measure, so the recorder is told to fall back to the clock.
+    assert uploader.segment_duration_seconds() is None

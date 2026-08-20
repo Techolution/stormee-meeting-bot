@@ -221,9 +221,22 @@ class Recorder:
         """Retry buffered chunks. Wired to the websocket reconnect hook."""
         return await self._uploader.flush_buffered()
 
+    def _segment_elapsed_seconds(self) -> float:
+        """How much of the current segment has been captured.
+
+        Media time when the uploader can report it, because that is what the
+        segment will actually contain. Wall clock otherwise: it over-counts
+        whenever capture stalls, but a transport that forwards opaque bytes has
+        nothing better to offer.
+        """
+        media_seconds = self._uploader.segment_duration_seconds()
+        if media_seconds is not None:
+            return media_seconds
+        return self._stats.duration_seconds - self._last_segment_upload_duration
+
     async def _trigger_segment_upload(self) -> None:
         """Finalize current segment, upload it, generate highlights, and prepare for next segment.
-        
+
         This is called when the max_duration_seconds threshold is reached during recording.
         The segment is uploaded with highlights, and a new uploader is created for the
         next segment. Recording continues uninterrupted.
@@ -275,32 +288,33 @@ class Recorder:
 
     async def _on_chunk(self, chunk: AudioChunk) -> None:
         """Hand a captured chunk to the uploader.
-        
+
         Also monitors duration for incremental segment uploads. When the
         max_duration_seconds threshold is reached, automatically finalizes
         the current segment, generates highlights, and creates a new uploader
         for the next segment.
         """
         await self._uploader.upload(chunk)
-        
-        # Check if we've reached the auto-upload duration threshold
-        # Use guard flag to prevent concurrent segment uploads
-        if (
-            not self._segment_upload_in_progress
-            and self._max_duration_seconds
-            and self._stats.duration_seconds >= (self._last_segment_upload_duration + self._max_duration_seconds)
-        ):
-            # Trigger auto-upload of current segment
-            self._segment_upload_in_progress = True
-            logger.info(
-                "Recording segment duration threshold reached; auto-uploading segment",
-                extra={
-                    "meeting_id": self._context.meeting_id,
-                    "segment_number": self._segment_number,
-                    "duration_seconds": self._stats.duration_seconds,
-                },
-            )
-            try:
-                await self._trigger_segment_upload()
-            finally:
-                self._segment_upload_in_progress = False
+
+        if self._segment_upload_in_progress or not self._max_duration_seconds:
+            return
+
+        elapsed_seconds = self._segment_elapsed_seconds()
+        if elapsed_seconds < self._max_duration_seconds:
+            return
+
+        # Guarded so a cut that outlives the next chunk cannot start a second one.
+        self._segment_upload_in_progress = True
+        logger.info(
+            "Recording segment duration threshold reached; auto-uploading segment",
+            extra={
+                "meeting_id": self._context.meeting_id,
+                "segment_number": self._segment_number,
+                "segment_seconds": round(elapsed_seconds, 1),
+                "duration_seconds": self._stats.duration_seconds,
+            },
+        )
+        try:
+            await self._trigger_segment_upload()
+        finally:
+            self._segment_upload_in_progress = False

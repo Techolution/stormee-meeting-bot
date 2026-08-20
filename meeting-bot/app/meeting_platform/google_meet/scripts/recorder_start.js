@@ -1,4 +1,4 @@
-    async (meetingId) => {
+    async ({ meetingId, chunkDurationMs }) => {
         try {
             if (
                 window.__meetingAudio &&
@@ -479,7 +479,10 @@
             // START
             // ======================================================
 
-            mediaRecorder.start(5000);
+            // The timeslice is the recording's chunk size. Segment cuts land
+            // on chunk boundaries, so it also bounds how precisely a segment
+            // can end.
+            mediaRecorder.start(chunkDurationMs || 5000);
 
 
             console.log(

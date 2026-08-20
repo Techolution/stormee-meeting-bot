@@ -123,6 +123,10 @@ class GoogleMeetPlatform(MeetingPlatform):
 
         self._left = False
         self._recording = False
+        #: Where page audio is delivered right now. Held on the instance rather
+        #: than captured by the callback, because the callback outlives any one
+        #: recording. See bind_chunk_sink.
+        self._chunk_sink: ChunkSink | None = None
 
     @property
     def actions(self) -> GoogleMeetActions:
@@ -388,17 +392,25 @@ class GoogleMeetPlatform(MeetingPlatform):
     # ------------------------------------------------------------------
 
     async def bind_chunk_sink(self, sink: ChunkSink) -> None:
-        """Expose the page callback that delivers audio chunks to Python.
+        """Point the page's audio callback at ``sink``.
 
-        Playwright allows a name to be bound once per page, so re-binding on a
-        second recording is a no-op — the original callback stays live, which is
-        why the sink is stateless with respect to individual recordings.
+        Playwright allows a name to be bound once per page, so the callback
+        installed by the first recording is the one that stays live for the
+        life of the page. It therefore must not close over a particular sink:
+        a second recording builds a new capture, and audio bound to the first
+        one would be delivered to a capture that has already been stopped and
+        silently dropped. Dispatching through ``self._chunk_sink`` keeps the
+        binding permanent while letting the destination change.
         """
+        self._chunk_sink = sink
 
         async def _receive(payload: dict) -> None:
             # Exceptions raised here propagate into page JavaScript and stop the
             # recorder, so the sink's contract is to never raise.
-            await sink.on_chunk(payload)
+            current = self._chunk_sink
+            if current is None:
+                return
+            await current.on_chunk(payload)
 
         await self._browser.expose_function(_CHUNK_CALLBACK, _receive)
 
@@ -412,7 +424,10 @@ class GoogleMeetPlatform(MeetingPlatform):
             raise RecordingError("cannot start recording: no live page")
 
         try:
-            await self._browser.evaluate(recorder_start(), meeting_id)
+            await self._browser.evaluate(
+                recorder_start(),
+                {"meetingId": meeting_id, "chunkDurationMs": chunk_duration_ms},
+            )
         except Exception as error:
             raise RecordingError(
                 f"failed to start in-page recording: {error}",
