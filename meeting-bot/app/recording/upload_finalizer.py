@@ -136,7 +136,8 @@ class UploadFinalizer:
             # Standard finalization: request full artifact
             await self._request_artifact(context, uploaded.filename)
 
-        await self._notify_user(context)
+        if is_final_segment:
+            await self._notify_user(context)
         return True
 
     @staticmethod

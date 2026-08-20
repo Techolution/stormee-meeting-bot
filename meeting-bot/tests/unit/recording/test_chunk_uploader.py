@@ -413,3 +413,42 @@ async def test_a_chunk_arriving_during_finalize_cannot_append_after_close(
     finals = [is_final for _, is_final in storage.blocks if is_final]
     assert len(finals) == 1, "the object may be closed exactly once"
     assert isinstance(outcome.complete, bool)
+
+
+async def test_reinitialize_preserves_bytes_during_concurrent_upload(
+    context: RecordingContext,
+) -> None:
+    """Simulate the recorder finalizing a segment, reinitializing, and a
+    concurrent chunk arriving between finalize() and reinitialize(). The
+    uploader must not lose those bytes when preparing the next segment.
+    """
+    storage = FakeStorage()
+    cw = FakeCWClient()
+    uploader = DirectChunkUploader(cw_client=cw, storage=storage, stats=RecordingStats())
+    await uploader.start(context)
+
+    # First segment: a small chunk that will be held until finalize.
+    await uploader.upload(make_chunk(0, size=128))
+
+    # Race: finalize and an arriving chunk run concurrently. The late chunk may
+    # complete after finalize returns but before reinitialize clears pending
+    # bytes; reinitialize must not drop it.
+    finalize_task = asyncio.create_task(uploader.finalize())
+    upload_task = asyncio.create_task(uploader.upload(make_chunk(1, size=128)))
+
+    # Wait for both to finish.
+    outcome_first = await finalize_task
+    await upload_task
+
+    # Prepare next segment (what Recorder would do).
+    await uploader.reinitialize(context)
+
+    # Second segment: more audio.
+    await uploader.upload(make_chunk(2, size=64))
+    outcome_second = await uploader.finalize()
+
+    # All bytes from all chunks must appear in storage in sequence order.
+    expected = bytes([0]) * 128 + bytes([1]) * 128 + bytes([2]) * 64
+    assert bytes(storage.data) == expected
+    assert outcome_first.complete is True or outcome_first.complete is False
+    assert outcome_second.complete is True

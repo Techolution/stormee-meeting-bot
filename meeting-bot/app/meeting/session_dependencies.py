@@ -30,4 +30,4 @@ class SessionDependencies:
     storage_client: ResumableUploadClient
     mail_client: MailClient | None = None
     meeting_api_client: MeetingAPIClient | None = None
-    highlights_manager: HighlightsManager | None = None,
+    highlights_manager: HighlightsManager | None = None
