@@ -44,6 +44,7 @@ class Recorder:
         finalize_grace_period_seconds: float = 2.0,
         max_duration_seconds: int | None = None,
         generate_incremental_highlights: bool = False,
+        uploader_builder: callable | None = None,
     ) -> None:
         self._platform = platform
         self._uploader = uploader
@@ -53,6 +54,7 @@ class Recorder:
         self._grace_period = finalize_grace_period_seconds
         self._max_duration_seconds = max_duration_seconds
         self._generate_incremental_highlights = generate_incremental_highlights
+        self._uploader_builder = uploader_builder  # Function to create new uploaders for segments
 
         self._stats = RecordingStats()
         self._status = RecordingStatus.IDLE
@@ -225,10 +227,16 @@ class Recorder:
         """Finalize current segment, upload it, generate highlights, and prepare for next segment.
         
         This is called when the max_duration_seconds threshold is reached during recording.
-        The segment is uploaded with highlights, and a new uploader is created for the
-        next segment. Recording continues uninterrupted.
+        The segment is uploaded with highlights, and a completely NEW uploader is created for the
+        next segment to ensure clean state and proper WebM headers.
+        
+        CRITICAL: Creating new uploader ensures:
+        - Fresh sequencer (starts at 0, not continuing globally)
+        - New WebM header extraction from next segment's first chunk  
+        - Clean state (no header re-injection confusion)
+        - Each segment file is independently playable with proper headers
         """
-        # Finalize the current segment upload
+        # STEP 1: Finalize the current segment upload
         outcome = await self._uploader.finalize()
         
         logger.info(
@@ -241,18 +249,45 @@ class Recorder:
             },
         )
         
-        # Request highlights/artifacts for this segment (not final)
-        if self._finalizer is not None:
-            await self._finalizer.finalize(
-                context=self._context,
-                outcome=outcome,
-                stats=self._stats,
-                is_final_segment=False,
-                segment_number=self._segment_number,
-                generate_incremental_highlights=self._generate_incremental_highlights,
+        # STEP 2: Create BRAND NEW uploader for next segment (critical for proper segmentation)
+        if self._uploader_builder is not None:
+            # Create fresh uploader for segment 2, 3, etc.
+            self._uploader = self._uploader_builder()
+            await self._uploader.start(self._context)
+            
+            logger.info(
+                "New uploader created for next segment",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "new_segment_number": self._segment_number + 1,
+                },
+            )
+        else:
+            # Fallback: use old reinitialize method if no builder provided
+            await self._uploader.reinitialize(self._context)
+            logger.info(
+                "Uploader re-initialized for next segment (fallback)",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "next_segment_number": self._segment_number + 1,
+                },
             )
         
-        # Update segment tracking
+        # STEP 3: Request highlights/artifacts for this segment (not final)
+        # Fire-and-forget to avoid blocking next segment's chunks
+        if self._finalizer is not None:
+            asyncio.create_task(
+                self._finalizer.finalize(
+                    context=self._context,
+                    outcome=outcome,
+                    stats=self._stats,
+                    is_final_segment=False,
+                    segment_number=self._segment_number,
+                    generate_incremental_highlights=self._generate_incremental_highlights,
+                )
+            )
+        
+        # STEP 4: Update segment tracking
         self._last_segment_upload_duration = self._stats.duration_seconds
         self._segment_number += 1
         
@@ -263,11 +298,6 @@ class Recorder:
                 "next_segment_number": self._segment_number,
             },
         )
-        
-        # Re-initialize uploader for the next segment
-        # For direct uploads, this creates a new resumable URL
-        # For streaming, this updates context and lets audio service handle segmentation
-        await self._uploader.reinitialize(self._context)
 
     # ------------------------------------------------------------------
     # Internals

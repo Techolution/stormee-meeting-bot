@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-08-18T16:16:02.837085+00:00",
+  "meeting_id": "igw-ctuq-eag",
+  "payload": {
+    "status": "left",
+    "detail": {
+      "uptime_seconds": 114.9
+    }
+  }
+}

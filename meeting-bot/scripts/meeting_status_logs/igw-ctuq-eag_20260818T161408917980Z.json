@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-08-18T16:14:08.917903+00:00",
+  "meeting_id": "igw-ctuq-eag",
+  "payload": {
+    "status": "joining",
+    "detail": {
+      "meeting_url": "https://meet.google.com/igw-ctuq-eag"
+    }
+  }
+}

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 
 from app.api.dependencies import ManagerDep
+from app.recording.session_finalizer import SessionFinalizer, SessionFinalizationEvent
 from app.schemas.recording import (
     RecordingActionResponse,
     RecordingStatusResponse,
@@ -76,3 +77,73 @@ async def recording_status(meeting_id: str, manager: ManagerDep) -> RecordingSta
         stopped_at=stats.stopped_at.isoformat() if stats.stopped_at else None,
         transport=recorder.transport,
     )
+
+
+@router.post(
+    "/sessions/finalize",
+    response_model=dict,
+    summary="Finalize Opus session and construct WebM container",
+)
+async def finalize_session(
+    payload: dict = Body(...),
+) -> dict:
+    """Finalize a 5-minute Opus recording session and construct WebM container.
+    
+    Called by the frontend when:
+    - 5-minute session boundary is reached
+    - Recording is stopped
+    
+    This endpoint receives the session finalization event, queries the Opus packets
+    from the database for that session, constructs a valid WebM container with EBML
+    headers and audio track metadata, and uploads the resulting file to GCS.
+    
+    Args:
+        payload: Session finalization event containing:
+            - meeting_id: Meeting identifier
+            - upload_session_id: Session identifier
+            - start_time: Session start time (ISO format)
+            - end_time: Session end time (ISO format)
+            - sequence_range: {"start": int, "end": int} for packet lookup
+            - duration_ms: Session duration in milliseconds
+            - chunk_count: Number of chunks in session
+            - byte_count: Total bytes in session
+            - status: "complete"
+    
+    Returns:
+        Result dict containing:
+        - success: bool
+        - session_id: Session identifier
+        - webm_path: GCS path to WebM file (if successful)
+        - size_bytes: WebM file size (if successful)
+        - duration_ms: Actual duration of WebM (if successful)
+        - packet_count: Number of Opus packets (if successful)
+        - error: Error message (if failed)
+    """
+    try:
+        # Parse event from payload
+        from datetime import datetime
+        
+        event = SessionFinalizationEvent(
+            meeting_id=payload.get("meetingId"),
+            upload_session_id=payload.get("uploadSessionId"),
+            start_time=datetime.fromisoformat(payload.get("startTime", "")),
+            end_time=datetime.fromisoformat(payload.get("endTime", "")),
+            sequence_range=payload.get("sequenceRange", {}),
+            duration_ms=payload.get("durationMs", 0),
+            chunk_count=payload.get("chunkCount", 0),
+            byte_count=payload.get("byteCount", 0),
+            status=payload.get("status", "complete"),
+        )
+        
+        # Create finalizer and process session
+        finalizer = SessionFinalizer()
+        result = await finalizer.finalize_session(event)
+        
+        return result
+    
+    except Exception as error:
+        return {
+            "success": False,
+            "error": str(error),
+            "session_id": payload.get("uploadSessionId", "unknown"),
+        }

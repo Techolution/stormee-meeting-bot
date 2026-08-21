@@ -64,6 +64,13 @@ class BrowserOptions:
             "--disable-sync",
             "--disable-component-update",
             "--disable-features=Translate,BackForwardCache",
+            # "--single-process",
+            # "--disable-sync",
+            # "--disable-default-apps",
+            # "--disable-plugins",
+            # "--disable-preconnect",
+            # "--disable-background-networking",
+            # "--memory-pressure-off"
         )
     )
 

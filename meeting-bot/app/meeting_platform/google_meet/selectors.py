@@ -65,6 +65,8 @@ LOBBY_WAIT_TEXT: Final[str] = "Please wait until a meeting host brings you into 
 
 #: Any of these means the bot is inside the meeting room.
 IN_MEETING_INDICATORS: Final[tuple[str, ...]] = (
+    '[aria-label*="Turn on captions" i]',
+    '[aria-label*="Turn off captions" i]',
     '[aria-label*="Leave call" i]',
     '[aria-label*="End call" i]',
     "[data-participant-id]",

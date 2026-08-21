@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-08-18T16:15:05.018411+00:00",
+  "meeting_id": "igw-ctuq-eag",
+  "payload": {
+    "status": "recording_stopped",
+    "detail": {
+      "complete": true,
+      "uploaded_chunks": 1,
+      "uploaded_bytes": 228471,
+      "pending_chunks": 0,
+      "public_url": "creative-workspace/projects/6a78bbb3dfeb370713b22c8d/igw-ctuq-eag_4f8d104e-fda6-4dbb-9ede-5ab31de8e441.webm",
+      "detail": ""
+    }
+  }
+}

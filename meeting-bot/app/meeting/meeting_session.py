@@ -365,6 +365,13 @@ class MeetingSession:
         stats = RecordingStats()
         uploader = self._build_uploader(stats)
 
+        # Build a factory function for creating new uploaders during segment transitions
+        # This ensures each segment gets a fresh uploader with clean state
+        def uploader_builder() -> ChunkUploader:
+            """Create a new uploader for the next segment."""
+            new_stats = RecordingStats()
+            return self._build_uploader(new_stats)
+
         return Recorder(
             platform=self._platform,
             uploader=uploader,
@@ -378,6 +385,7 @@ class MeetingSession:
             finalize_grace_period_seconds=self._settings.recording.finalize_grace_period_seconds,
             max_duration_seconds=max_duration_seconds,
             generate_incremental_highlights=generate_incremental_highlights,
+            uploader_builder=uploader_builder,
         )
 
     def _build_uploader(self, stats: RecordingStats) -> ChunkUploader:

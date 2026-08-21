@@ -1,46 +1,135 @@
 /**
  * Determine where the bot stands relative to the meeting room.
  *
- * Called with the selector groups owned by selectors.py so that DOM knowledge
- * stays in one place on the Python side.
+ * @param {{
+ *   lobbySelectors: string[],
+ *   lobbyText: string,
+ *   inMeetingSelectors: string[]
+ * }} config
  *
- * @param {{lobbySelectors: string[], lobbyText: string, inMeetingSelectors: string[]}} config
  * @returns {"LOBBY"|"IN_MEETING"|"UNKNOWN"}
  */
 (config) => {
     const { lobbySelectors, lobbyText, inMeetingSelectors } = config;
 
-    // Lobby is checked first: several in-meeting markers (participant tiles,
-    // control bars) render behind the waiting-room overlay, so checking
-    // "in meeting" first would produce a false positive.
-    for (const selector of lobbySelectors) {
-        try {
-            if (document.querySelector(selector)) {
-                return "LOBBY";
-            }
-        } catch (e) {
-            // An invalid selector must not abort the whole probe.
+    /**
+     * Check whether an element is actually visible.
+     *
+     * Google Meet can keep old lobby elements in the DOM after
+     * the bot has been admitted, so querySelector() alone is not
+     * reliable.
+     */
+    const isVisible = (el) => {
+        if (!el) {
+            return false;
         }
-    }
 
-    if (lobbyText) {
-        const waiting = Array.from(document.querySelectorAll("div")).some(
-            (el) => el.textContent && el.textContent.includes(lobbyText)
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+
+        return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            rect.width > 0 &&
+            rect.height > 0
         );
-        if (waiting) {
-            return "LOBBY";
+    };
+
+    /**
+     * Check whether any selector matches a visible element.
+     */
+    const hasVisibleSelector = (selectors) => {
+        for (const selector of selectors) {
+            try {
+                const elements = document.querySelectorAll(selector);
+
+                for (const el of elements) {
+                    if (isVisible(el)) {
+                        return true;
+                    }
+                }
+            } catch (e) {
+                // Ignore invalid selectors.
+            }
         }
+
+        return false;
+    };
+
+    // ============================================================
+    // 1. CHECK IN-MEETING FIRST
+    // ============================================================
+    //
+    // IMPORTANT:
+    // Meet may leave lobby elements in the DOM after admission.
+    // Therefore IN_MEETING must take priority over LOBBY.
+    //
+
+    if (hasVisibleSelector(inMeetingSelectors)) {
+        return "IN_MEETING";
     }
 
-    for (const selector of inMeetingSelectors) {
-        try {
-            if (document.querySelector(selector)) {
+    // Strong fallback: Leave/End call button
+    try {
+        const leaveButtons = document.querySelectorAll(
+            '[aria-label*="Leave call" i], ' +
+            '[aria-label*="End call" i]'
+        );
+
+        for (const el of leaveButtons) {
+            if (isVisible(el)) {
                 return "IN_MEETING";
             }
+        }
+    } catch (e) {
+        // Ignore.
+    }
+
+    // Another useful in-meeting signal.
+    try {
+        const videos = document.querySelectorAll("video");
+
+        for (const video of videos) {
+            if (isVisible(video)) {
+                return "IN_MEETING";
+            }
+        }
+    } catch (e) {
+        // Ignore.
+    }
+
+    // ============================================================
+    // 2. CHECK LOBBY
+    // ============================================================
+
+    if (hasVisibleSelector(lobbySelectors)) {
+        return "LOBBY";
+    }
+
+    // Check the actual waiting-room message.
+    if (lobbyText) {
+        try {
+            const elements = document.querySelectorAll("body *");
+
+            for (const el of elements) {
+                if (!isVisible(el)) {
+                    continue;
+                }
+
+                const text = (el.textContent || "").trim();
+
+                if (text.includes(lobbyText)) {
+                    return "LOBBY";
+                }
+            }
         } catch (e) {
-            // Ignore and try the next candidate.
+            // Ignore.
         }
     }
+
+    // ============================================================
+    // 3. UNKNOWN
+    // ============================================================
 
     return "UNKNOWN";
 }

@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-08-18T16:15:50.787001+00:00",
+  "meeting_id": "igw-ctuq-eag",
+  "payload": {
+    "status": "transcription_stopped",
+    "detail": {
+      "segment_count": 5
+    }
+  }
+}

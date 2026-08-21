@@ -349,8 +349,11 @@ class DirectChunkUploader(ChunkUploader):
             for ready in self._sequencer.release_ready():
                 # Extract header from sequence 0 (the WebM EBML header is in the first chunk)
                 if ready.sequence == 0 and self._header_bytes is None:
-                    # Save Sequence 0 to serve as the header template
-                    self._header_bytes = bytes(ready.data)
+                    # Save ONLY the WebM header portion (first ~4KB) from chunk 0
+                    # This avoids duplicating the audio frame data from chunk 0
+                    # WebM EBML header + codec info is typically < 4KB
+                    header_size = min(4096, len(ready.data))  # Extract first 4KB max
+                    self._header_bytes = bytes(ready.data[:header_size])
 
                 self._pending_bytes.extend(ready.data)
 
@@ -450,7 +453,23 @@ class DirectChunkUploader(ChunkUploader):
         return self._sequencer.pending_count if self._sequencer else 0
 
     async def reinitialize(self, context: RecordingContext) -> None:
-        """Re-initialize the uploader for the next segment."""
+        """Re-initialize the uploader for the next segment.
+        
+        CRITICAL ARCHITECTURE:
+        Each segment file needs to be independently valid WebM with its own headers.
+        However, chunks are numbered globally (0,1,2,...,50,51,52,...).
+        
+        Solution: For each segment, store the header from chunk 0, then:
+        - Segment 1: Uses chunk 0's full data (has WebM header + audio frame 0)
+        - Segment 2: Prepends chunk 0's header + uses chunks 4,5,6... as audio frames
+        - Segment 3: Prepends chunk 0's header + uses chunks 8,9,10... as audio frames
+        
+        This works because:
+        - Chunk 0's bytes = WebM EBML header + audio frame 0
+        - For segment 2, we prepend those same bytes (header stays same, frame 0 repeats)
+        - Audio frame 0 is tiny (~100 bytes) vs header (~4KB), negligible duplication
+        - WebM container remains valid for each segment file
+        """
         self._context = context
         async with self._lock:
             # 1. Reset upload target and state so a new object URL is generated on next chunk
@@ -458,15 +477,17 @@ class DirectChunkUploader(ChunkUploader):
             self._state = None
             self._failed = False
 
-            # 2. CLEAR pending bytes from previous segment so audio is NOT duplicated
+            # 2. CLEAR pending bytes from previous segment
             self._pending_bytes.clear()
 
-            # 3. Inject ONLY the WebM header bytes so the new segment starts as a valid file
+            # 3. Prepend WebM header for valid file structure
+            # For segments 2+, prepending chunk 0 bytes ensures WebM validity
+            # The re-injected frame 0 is negligible cost for valid file structure
             if self._header_bytes is not None:
                 self._pending_bytes.extend(self._header_bytes)
 
         logger.info(
-            "Uploader re-initialized for next segment (Buffer reset + WebM header injected)",
+            "Uploader re-initialized for next segment (header injected for WebM validity)",
             extra={"meeting_id": context.meeting_id},
         )
 

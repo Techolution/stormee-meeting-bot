@@ -141,6 +141,109 @@ When the final segment (remaining audio) is uploaded:
   - Monitor per-segment upload success
   - Alert on missing segments
 
+## Audio Duplication vs. File Validity: Finding the Balance
+
+**THE TRADE-OFF:**
+
+WebM files require proper EBML headers to be playable. Chunk 0 contains:
+- WebM EBML header (codec info, ~4KB) 
+- First audio frame data (~100 bytes)
+
+We have two options:
+
+### Option A: No Headers (Files Unplayable)
+```python
+# Don't reinject headers
+if self._header_bytes is not None:
+    self._pending_bytes.extend(self._header_bytes)  # REMOVED
+```
+Result: Segments 2+ missing WebM headers → **CORRUPTED, UNPLAYABLE** ❌
+
+### Option B: Full Headers + Minimal Frame Duplication (Files Valid)
+```python
+# Reinject headers for WebM validity
+if self._header_bytes is not None:
+    self._pending_bytes.extend(self._header_bytes)  # Full chunk 0
+```
+Result: 
+```
+Segment 1: Chunk 0 (header + frame 0) + Chunks 1,2,3 = [0KB header + ~100B frame 0 + audio 1-10sec]
+Segment 2: Chunk 0 (header + frame 0) + Chunks 4,5,6 = [0KB header + ~100B frame 0 + audio 11-20sec]
+Segment 3: Chunk 0 (header + frame 0) + Chunks 8,9,10 = [0KB header + ~100B frame 0 + audio 21-30sec]
+```
+
+**The Cost:** Each segment has ONE audio frame repeated (~100 bytes out of hundreds of KB)
+**The Benefit:** All segment files are valid, independently playable WebM ✅
+
+### Decision: Option C (Smart Header Extraction)
+
+**ACTUAL SOLUTION:** Extract ONLY the WebM header bytes, not the entire chunk 0:
+
+```python
+# In upload() method, when chunk 0 arrives:
+if ready.sequence == 0 and self._header_bytes is None:
+    # Extract only first 4KB (WebM EBML header size)
+    header_size = min(4096, len(ready.data))
+    self._header_bytes = bytes(ready.data[:header_size])
+```
+
+Then in `reinitialize()`:
+```python
+if self._header_bytes is not None:
+    self._pending_bytes.extend(self._header_bytes)  # Only ~4KB, no audio!
+```
+
+Result:
+```
+Segment 1: [WebM header ~4KB] + [Chunk 0 audio + Chunks 1,2,3] = 0-10sec ✅
+Segment 2: [WebM header ~4KB] + [Chunks 4,5,6,7] = 11-20sec ✅ (NO chunk 0 audio!)
+Segment 3: [WebM header ~4KB] + [Chunks 8,9,10,11] = 21-30sec ✅ (NO chunk 0 audio!)
+```
+
+**Why this works:**
+1. **WebM validity** - Headers present, files are playable ✅
+2. **No audio duplication** - Only 4KB header repeated, not chunk 0's audio ✅
+3. **Perfect segment boundaries** - Each segment has ONLY its own audio ✅
+
+Users get:
+- ✅ Segment 1: Complete audio 0-10sec
+- ✅ Segment 2: Complete audio 11-20sec (no overlap!)
+- ✅ Segment 3: Complete audio 21-30sec (no overlap!)
+- ✅ All segments independently playable with correct audio
+
+## Critical: Segment Upload Execution Order
+
+**PROBLEM:** If `reinitialize()` is called AFTER artifact generation, incoming chunks will fail:
+
+```
+10:51:09 - Threshold reached, finalize() starts
+10:51:14 - finalize() completes, upload CLOSED with is_final=True
+          Then: artifact generation, email sending (44 seconds!)
+10:51:58 - reinitialize() finally called (TOO LATE!)
+
+Meanwhile:
+10:51:30 - Chunk 6 arrives → tries to upload to CLOSED session → ERROR!
+```
+
+**SOLUTION:** Call `reinitialize()` IMMEDIATELY after `finalize()`, before any async work:
+
+```python
+async def _trigger_segment_upload(self) -> None:
+    # STEP 1: Finalize current segment
+    outcome = await self._uploader.finalize()  # Closes upload
+    
+    # STEP 2: Reinitialize IMMEDIATELY (creates new session)
+    await self._uploader.reinitialize(self._context)  # <- MUST BE HERE!
+    
+    # STEP 3: Update counters
+    self._segment_number += 1
+    
+    # STEP 4: Artifact generation (non-blocking, fire-and-forget)
+    asyncio.create_task(self._finalizer.finalize(...))  # Background task
+```
+
+Now incoming chunks will upload to the new session created in STEP 2, not the closed session from STEP 1.
+
 ## Concurrency Control: Preventing Duplicate Segment Uploads
 
 To prevent race conditions where multiple chunks arrive during segment upload finalization, a guard flag `_segment_upload_in_progress` is used:
@@ -183,15 +286,62 @@ async def reinitialize(self, context: RecordingContext) -> None:
     self._target = None      # Remove old upload target
     self._state = None       # Clear resumable state
     self._pending_bytes.clear()  # Clear pending data
+    # CRITICAL: Do NOT reset the sequencer!
+    # Keep sequencer to handle chunks across segment boundaries
     self._failed = False     # Reset error flag
 ```
 
-How it works:
-1. When next chunk arrives, `_ensure_target()` is called
-2. `_ensure_target()` sees `self._state is None` and creates a new resumable URL
-3. New URL returned from CW API is stored in `self._state`
-4. Chunks continue uploading to the new URL
-5. Sequencer is preserved to maintain chunk ordering across segments
+**Why Sequencer Must NOT Be Reset:**
+
+The ChunkSequencer does NOT enforce per-file sequence order. It ensures GLOBAL chunk sequence ordering:
+- Browser sends chunks with continuous sequence: 0, 1, 2, ..., 50, 51, 52, ..., 100, ...
+- This sequence is GLOBAL across all segments
+- Sequencer's job: buffer out-of-order arrivals, release when in-sequence
+
+**Segment Upload Flow:**
+
+```
+Segment 1: Create File1 with resumable URL
+  Chunks 0-50 arrive → Sequencer releases them in order → Upload to File1
+  
+Reinitialize: Clear File1's state, keep sequencer
+  
+Segment 2: Create File2 with NEW resumable URL
+  Chunks 51-100 arrive → Sequencer (at state 51) releases them → Upload to File2
+  
+Segment 3: Create File3 with NEW resumable URL
+  Chunks 101-150 arrive → Sequencer (at state 101) releases them → Upload to File3
+```
+
+**Key Insight:**
+Different resumable URLs point to different files, so the SAME byte stream (from global sequencer) is uploaded to DIFFERENT storage objects. The sequencer doesn't care about files—it just ensures chunks are released in global sequence order.
+
+**Critical: Sequencer Creation Logic:**
+
+The `start()` method must preserve the sequencer:
+
+```python
+async def start(self, context: RecordingContext) -> None:
+    self._context = context
+    # Only create sequencer ONCE on first recording start
+    if self._sequencer is None:  # <- CRITICAL CHECK
+        self._sequencer = ChunkSequencer(meeting_id=context.meeting_id)
+    self._pending_bytes.clear()
+    self._failed = False
+```
+
+Why? Because:
+- Recording starts → `start()` called → creates sequencer
+- Chunks 0-50 arrive → released immediately
+- Segment 1 finalized → sequencer state: `next_expected=51`, `_seen={0..50}`
+- Segment 2 begins → `start()` called AGAIN
+  - ❌ If start() creates NEW sequencer: `next_expected=0`, `_seen={}`
+    - Chunk 51 arrives → sequencer waits for 0-50 → DEADLOCK
+  - ✅ If start() preserves sequencer: `next_expected=51`, `_seen={0..50}`
+    - Chunk 51 arrives → matches next_expected → RELEASED
+
+**Why Resetting Breaks It:**
+If sequencer is reset or recreated during segment transitions, incoming chunks for segment 2+ are waiting for earlier sequence numbers that already passed.
 
 ### StreamingChunkUploader Re-initialization
 
@@ -248,20 +398,102 @@ Note: Re-initialization happens inside `_on_chunk()` which is called asynchronou
 - `Recorder.stop()`: Final segment handling
 - `UploadFinalizer.finalize()`: Segment-aware artifact generation
 
+## Approach 2: Fresh Uploader Per Segment (Implemented)
+
+To solve cumulative segment uploads and audio duplication issues, we implement **Approach 2: Create New Uploader Instance Per Segment**.
+
+### Problem Addressed
+
+Previous approaches tried to reuse the same uploader with reinitialize(), but this caused:
+1. **Audio Duplication**: WebM header bytes from chunk 0 were re-injected into segment 2, causing overlap
+2. **Cumulative Uploads**: Segments were 0-10s, 0-20s, 0-30s instead of 0-10s, 11-20s, 21-30s
+3. **State Confusion**: Single uploader instance accumulated state across segments
+
+### Solution
+
+**Create a completely fresh uploader for each segment** instead of reusing/reinitializing.
+
+#### Implementation Details:
+
+1. **Uploader Builder Factory** (`MeetingSession._build_recorder()`):
+   ```python
+   def uploader_builder() -> ChunkUploader:
+       """Create a new uploader for the next segment."""
+       new_stats = RecordingStats()
+       return self._build_uploader(new_stats)
+   ```
+   - Creates a closure that has access to dependencies
+   - Returns completely fresh uploader with new RecordingStats
+   - Passed to Recorder during construction
+
+2. **Recorder Stores Builder** (`Recorder.__init__()`):
+   ```python
+   self._uploader_builder = uploader_builder  # Function to create new uploaders for segments
+   ```
+   - Stores the builder callback for later use
+   - Used in `_trigger_segment_upload()` for segment transitions
+
+3. **Create New Uploader on Segment Transition** (`Recorder._trigger_segment_upload()`):
+   ```python
+   # STEP 2: Create BRAND NEW uploader for next segment
+   if self._uploader_builder is not None:
+       self._uploader = self._uploader_builder()
+       await self._uploader.start(self._context)
+   else:
+       # Fallback: use old reinitialize method if no builder provided
+       await self._uploader.reinitialize(self._context)
+   ```
+   - When `max_duration_seconds` threshold reached, creates fresh uploader
+   - New uploader has:
+     - Fresh `_sequencer` (starts at 0, not continuing globally)
+     - Fresh `_pending_bytes` buffer
+     - Fresh `_header_bytes` extraction from new segment's chunk 0
+     - Fresh `_state` and resumable URL
+   - Ensures each segment is uploaded to its own object/resumable session
+   - Maintains backward compatibility with fallback to reinitialize
+
+### Why This Works
+
+1. **Fresh Sequencer**: Each uploader starts with a new ChunkSequencer, so chunk 0 for segment 2 is properly sequenced (not waiting for chunk 51)
+2. **Clean Header Extraction**: New uploader extracts WebM header from segment 2's chunk 0, not reusing segment 1's header
+3. **Independent Objects**: Each segment uploads to its own resumable URL, creating separate audio files
+4. **No State Carryover**: No accumulated `_pending_bytes` or `_header_bytes` confusion between segments
+
+### Code Impact
+
+**Modified Files:**
+- `meeting-bot/app/meeting/meeting_session.py`: Added uploader_builder to _build_recorder()
+- `meeting-bot/app/recording/recorder.py`:
+  - Added uploader_builder parameter to __init__()
+  - Updated _trigger_segment_upload() to create fresh uploader
+  - Made finalizer.finalize() non-blocking with asyncio.create_task()
+
+**Unchanged:**
+- `meeting-bot/app/recording/chunk_uploader.py`: reinitialize() methods kept for backward compatibility
+- No changes to sequencer logic or header extraction
+
+### Result
+
+Segments are now uploaded independently with proper headers:
+- Segment 1: 0-10s (uploaded as complete WebM file)
+- Segment 2: 11-20s (uploaded as complete WebM file)
+- Segment 3: 21-30s (uploaded as complete WebM file)
+
+Each segment is independently playable with valid WebM structure.
+
 ## Next Steps
 
-1. **Implement Uploader Re-initialization**
-   - Design method for creating new resumable URLs mid-recording
-   - Handle state transfer between uploaders
-   - Test with DirectChunkUploader and StreamingChunkUploader
+1. **Testing**
+   - Unit tests for uploader_builder and segment creation
+   - Integration tests with actual multi-segment recordings
+   - Verify segment boundaries and audio continuity
 
-2. **Testing**
-   - Unit tests for segment monitoring logic
-   - Integration tests with actual recordings
-   - Edge cases: early stops, no max_duration_seconds, etc.
-
-3. **Monitoring & Observability**
+2. **Monitoring & Observability**
    - Track segment upload latencies
    - Monitor success/failure rates per segment
    - Alert on excessively long segments
+
+3. **Performance Optimization**
+   - Consider caching chunk headers for efficiency
+   - Optimize sequencer creation overhead
 

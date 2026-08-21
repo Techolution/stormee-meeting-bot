@@ -92,6 +92,7 @@ async def build_application_context(settings: Settings) -> ApplicationContext:
         storage_client=storage_client,
         mail_client=mail_client,
         meeting_api_client=meeting_api_client,
+        hi
     )
 
     # A bot pod drives one browser; running two meetings in one process means

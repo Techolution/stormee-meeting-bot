@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-08-18T16:14:08.052037+00:00",
+  "meeting_id": "igw-ctuq-eag",
+  "payload": {
+    "status": "initialized",
+    "detail": {
+      "session_id": "86597942818f47f4",
+      "meeting_url": "https://meet.google.com/igw-ctuq-eag",
+      "user_name": "Swikrit Shukla",
+      "user_email": "swikrit.shukla@techolution.com",
+      "project_id": "6a78bbb3dfeb370713b22c8d",
+      "project_name": "MeetBot Test",
+      "meeting_title": "Test Meet"
+    }
+  }
+}
