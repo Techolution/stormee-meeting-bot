@@ -119,27 +119,19 @@ class UploadFinalizer:
             extra={"meeting_id": context.meeting_id, "object_name": uploaded.filename},
         )
 
-        # Request highlights or artifacts based on upload mode
+        # Every upload that lands gets exactly one artifact request, and the
+        # final segment is not a special case: it is the last part of the
+        # meeting, not a summary of the whole thing. The audio it points at
+        # covers only its own segment either way.
+        #
+        # The manager adds part numbering and remembers which ranges have been
+        # asked for, which is what makes several artifacts from one meeting
+        # tellable apart. Without one, a plain request is all that is on offer.
         if generate_incremental_highlights and self._highlights is not None and stats is not None:
-            if is_final_segment:
-                # For final segment, generate full artifact/highlights
-                await self._request_artifact(context, uploaded.filename)
-            else:
-                # For incremental segments, generate segment-specific highlights
-                await self._request_incremental_highlights(
-                    context, uploaded.filename, stats, segment_number
-                )
-        elif not is_final_segment and generate_incremental_highlights:
-            # Even without highlights manager, log that segment was uploaded
-            logger.info(
-                "Recording segment uploaded",
-                extra={
-                    "segment_number": segment_number,
-                    "meeting_id": context.meeting_id,
-                },
+            await self._request_incremental_highlights(
+                context, uploaded.filename, stats, segment_number
             )
         else:
-            # Standard finalization: request full artifact
             await self._request_artifact(context, uploaded.filename)
 
         if is_final_segment:

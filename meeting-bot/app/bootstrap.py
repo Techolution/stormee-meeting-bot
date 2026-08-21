@@ -23,6 +23,7 @@ from app.core.config import Settings
 from app.meeting.meeting_manager import MeetingManager
 from app.meeting.session_dependencies import SessionDependencies
 from app.meeting_platform.google_meet.scripts import init_scripts
+from app.recording.highlights_manager import HighlightsManager
 from app.repositories import create_state_repository
 from app.repositories.base import MeetingStateRepository
 
@@ -84,6 +85,17 @@ async def build_application_context(settings: Settings) -> ApplicationContext:
         MeetingAPIClient(settings.meeting_api) if settings.meeting_api.enabled else None
     )
 
+    # Segment uploads are only half the feature: each segment also has to be
+    # turned into an artifact while the meeting is still running. Without this
+    # the manager is never built, and every segment but the last is uploaded
+    # and then silently left unprocessed.
+    #
+    # No minimum duration: by the time this is called a segment has already
+    # been uploaded, so the decision to produce it has been made. Refusing to
+    # process a short trailing segment would leave the end of a meeting out of
+    # the highlights with nothing in the response to say why.
+    highlights_manager = HighlightsManager(cw_client=cw_client, min_duration_seconds=0.0)
+
     dependencies = SessionDependencies(
         settings=settings,
         browser_manager=BrowserManager.from_settings(settings.browser),
@@ -92,6 +104,7 @@ async def build_application_context(settings: Settings) -> ApplicationContext:
         storage_client=storage_client,
         mail_client=mail_client,
         meeting_api_client=meeting_api_client,
+        highlights_manager=highlights_manager,
     )
 
     # A bot pod drives one browser; running two meetings in one process means

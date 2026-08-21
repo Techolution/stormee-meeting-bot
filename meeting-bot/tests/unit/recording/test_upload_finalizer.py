@@ -7,10 +7,13 @@ waiting still hears that the recording is ready.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.recording.chunk_uploader import UploadOutcome
 from app.recording.models import RecordingContext, RecordingStats
+from app.recording.highlights_manager import HighlightsManager
 from app.recording.upload_finalizer import UploadFinalizer
 from tests.conftest import FakeCWClient, FakeMailClient
 
@@ -72,3 +75,93 @@ async def test_a_recording_that_captured_nothing_sends_no_mail(
 
     assert registered is False
     assert mail.sent == []
+
+
+# --------------------------------------------------------------------------
+# One artifact per segment
+# --------------------------------------------------------------------------
+
+
+def _highlights(cw: FakeCWClient) -> HighlightsManager:
+    """As bootstrap builds it: no minimum duration, so no segment is skipped."""
+    return HighlightsManager(cw_client=cw, min_duration_seconds=0.0)
+
+
+async def test_every_segment_of_a_meeting_gets_its_own_artifact(
+    context: RecordingContext,
+) -> None:
+    """The point of segmenting: highlights arrive while the meeting is running.
+
+    Before, an intermediate segment fell into a branch that logged a line and
+    requested nothing, so a two-hour meeting produced one artifact at the very
+    end rather than one per part.
+    """
+    cw = FakeCWClient()
+    finalizer = UploadFinalizer(cw_client=cw, highlights_manager=_highlights(cw))
+    stats = RecordingStats(started_at=datetime.now(timezone.utc) - timedelta(minutes=45))
+
+    for segment in (1, 2):
+        await finalizer.finalize(
+            context, _uploaded(f"part{segment}.webm"), stats=stats,
+            is_final_segment=False, segment_number=segment,
+            generate_incremental_highlights=True,
+        )
+    await finalizer.finalize(
+        context, _uploaded("part3.webm"), stats=stats,
+        is_final_segment=True, segment_number=3,
+        generate_incremental_highlights=True,
+    )
+
+    assert len(cw.artifacts) == 3, "one artifact per uploaded segment"
+    assert [call["audio_name"] for call in cw.artifacts] == [
+        "part1.webm", "part2.webm", "part3.webm",
+    ], "each artifact must point at its own segment's audio"
+
+
+async def test_each_segment_artifact_is_requested_under_its_own_id(
+    context: RecordingContext,
+) -> None:
+    """Distinct request ids are what stop CW treating these as one job."""
+    cw = FakeCWClient()
+    finalizer = UploadFinalizer(cw_client=cw, highlights_manager=_highlights(cw))
+    stats = RecordingStats(started_at=datetime.now(timezone.utc) - timedelta(minutes=30))
+
+    for segment in (1, 2):
+        await finalizer.finalize(
+            context, _uploaded(f"part{segment}.webm"), stats=stats,
+            is_final_segment=segment == 2, segment_number=segment,
+            generate_incremental_highlights=True,
+        )
+
+    ids = [call.get("request_id") for call in cw.artifacts]
+    assert ids == ["meeting-1-segment-1", "meeting-1-segment-2"]
+    assert len(set(ids)) == len(ids)
+
+
+async def test_a_short_trailing_segment_is_not_skipped(
+    context: RecordingContext,
+) -> None:
+    """A meeting ending a few seconds after a cut still has a last part."""
+    cw = FakeCWClient()
+    finalizer = UploadFinalizer(cw_client=cw, highlights_manager=_highlights(cw))
+    stats = RecordingStats(started_at=datetime.now(timezone.utc) - timedelta(seconds=20))
+
+    await finalizer.finalize(
+        context, _uploaded("tail.webm"), stats=stats,
+        is_final_segment=True, segment_number=2,
+        generate_incremental_highlights=True,
+    )
+
+    assert len(cw.artifacts) == 1
+
+
+async def test_without_the_flag_a_recording_still_gets_one_artifact(
+    context: RecordingContext,
+) -> None:
+    """The unsegmented path is unchanged."""
+    cw = FakeCWClient()
+    finalizer = UploadFinalizer(cw_client=cw, highlights_manager=_highlights(cw))
+
+    await finalizer.finalize(context, _uploaded(), stats=RecordingStats())
+
+    assert len(cw.artifacts) == 1
