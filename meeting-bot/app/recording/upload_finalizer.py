@@ -129,7 +129,7 @@ class UploadFinalizer:
         # tellable apart. Without one, a plain request is all that is on offer.
         if generate_incremental_highlights and self._highlights is not None and stats is not None:
             await self._request_incremental_highlights(
-                context, uploaded.filename, stats, segment_number
+                context, uploaded.filename, stats, segment_number, is_final_segment
             )
         else:
             await self._request_artifact(context, uploaded.filename)
@@ -168,7 +168,12 @@ class UploadFinalizer:
             )
 
     async def _request_incremental_highlights(
-        self, context: RecordingContext, filename: str, stats: RecordingStats, segment_number: int = 1
+        self,
+        context: RecordingContext,
+        filename: str,
+        stats: RecordingStats,
+        segment_number: int = 1,
+        is_final: bool = False,
     ) -> None:
         """Request highlights for an incremental segment of a recording.
 
@@ -177,6 +182,8 @@ class UploadFinalizer:
             filename: Name of the audio file in storage.
             stats: Recording statistics including duration.
             segment_number: Which segment this is (1, 2, 3, ...) for labeling.
+            is_final: True when this segment ends the meeting, so CW can tell
+                the closing segment from the ones before it.
         """
         if self._highlights is None:
             logger.warning(
@@ -191,6 +198,7 @@ class UploadFinalizer:
                 stats=stats,
                 audio_filename=filename,
                 segment_number=segment_number,
+                is_final=is_final,
             )
             if segment is None:
                 logger.debug(

@@ -105,6 +105,7 @@ class HighlightsManager:
         stats: RecordingStats,
         audio_filename: str,
         segment_number: int = 1,
+        is_final: bool = False,
     ) -> HighlightSegment | None:
         """Generate highlights for the current recording state.
 
@@ -113,6 +114,10 @@ class HighlightsManager:
             stats: Recording statistics including duration.
             audio_filename: Name of the audio file in storage.
             segment_number: Which incremental segment this is (1, 2, 3, ...).
+            is_final: True when this segment ends the meeting. The duration
+                threshold is skipped in that case: the tail of a meeting is
+                whatever is left after the last boundary, so holding it to a
+                minimum length would silently drop the closing segment.
 
         Returns:
             HighlightSegment if generation was requested, None if skipped.
@@ -122,7 +127,9 @@ class HighlightsManager:
         """
         assert context.project_id is not None
 
-        if not self.should_generate_highlights(context.meeting_id, stats.duration_seconds):
+        if not is_final and not self.should_generate_highlights(
+            context.meeting_id, stats.duration_seconds
+        ):
             logger.debug(
                 "Skipping highlights: insufficient duration",
                 extra={
@@ -136,12 +143,25 @@ class HighlightsManager:
         segment_id = f"{context.meeting_id}-segment-{segment_number}"
         display_name = f"{context.meeting_title or context.meeting_id} (Part {segment_number})"
 
+        # Where the previous segment ended, which is where this one begins.
+        # Recorded before the bookkeeping below overwrites it.
+        last_duration = self._processed_duration.get(context.meeting_id, 0.0)
+
+        incremental_mh_metadata = {
+            "meeting_id": context.meeting_id,
+            "segment_number": segment_number,
+            "last_duration": last_duration,
+            "is_final": is_final,
+        }
+
         logger.info(
             "Generating incremental highlights",
             extra={
                 "segment_id": segment_id,
                 "meeting_id": context.meeting_id,
                 "duration_seconds": stats.duration_seconds,
+                "last_duration": last_duration,
+                "is_final": is_final,
             },
         )
 
@@ -153,6 +173,7 @@ class HighlightsManager:
                 user_email=context.user_email,
                 user_name=context.user_name,
                 request_id=segment_id,
+                incremental_mh_metadata=incremental_mh_metadata,
             )
         except Exception as error:
             logger.warning(
@@ -167,7 +188,7 @@ class HighlightsManager:
             meeting_id=context.meeting_id,
             project_id=context.project_id,
             duration_seconds=stats.duration_seconds,
-            start_seconds=self._processed_duration.get(context.meeting_id, 0.0),
+            start_seconds=last_duration,
             audio_filename=audio_filename,
             request_id=result.get("request_id"),
         )
