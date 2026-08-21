@@ -14,6 +14,19 @@
         margin: 0 0 10px 0;
         text-align: center;
       }
+      .status-wrapper {
+        display: none;
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #fff;
+        padding: 4px 0 0;
+        margin: 0 0 6px 0;
+        border-top: 1px solid #eee;
+      }
+      .status-wrapper.visible {
+        display: block;
+      }
       label {
         display: block;
         margin-top: 8px;
@@ -61,7 +74,7 @@
         cursor: not-allowed;
       }
       #status {
-        margin-top: 10px;
+        margin: 0;
         font-size: 0.85em;
         text-align: center;
         word-break: break-all;
@@ -116,6 +129,10 @@
     </style>
   </head>
   <body>
+    <div id="status-wrapper" class="status-wrapper">
+      <p id="status"></p>
+    </div>
+
     <h3>GMeet Bot Control</h3>
 
     <label for="environment">Environment</label>
@@ -127,6 +144,17 @@
     </select>
     <label for="meetingUrl">Meeting URL</label>
     <input id="meetingUrl" type="text" placeholder="https://meet.google.com/abc-defg-hij" />
+
+    <label for="meetingId">Meeting ID</label>
+    <input id="meetingId" type="text" placeholder="xcv-qzmt-nhr" />
+
+    <label for="maxDurationSeconds">Max Duration (seconds)</label>
+    <input id="maxDurationSeconds" type="number" min="1" step="1" placeholder="10" />
+
+    <label for="generateIncrementalHighlights" style="display:flex; align-items:center; gap:8px; margin-top:10px; font-weight:normal;">
+      <input id="generateIncrementalHighlights" type="checkbox" style="width:auto; margin:0;" />
+      Generate Incremental Highlights
+    </label>
 
     <label for="meetingTitle">Meeting Title</label>
     <input id="meetingTitle" type="text" placeholder="Test Meet" />
@@ -163,7 +191,6 @@
     <label for="volume">Volume (0.0 - 1.0)</label>
     <input id="volume" type="number" min="0" max="1" step="0.1" value="0.7" />
 
-    <p id="status"></p>
     <p id="api-url" class="api-url"></p>
     <div class="divider"></div>
 
