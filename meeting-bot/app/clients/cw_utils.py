@@ -250,8 +250,17 @@ class CWUtilsClient(BaseHTTPClient):
         model_type: str | None = None,
         large_language_model: str | None = None,
         request_id: str | None = None,
+        incremental_mh_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Ask CW to derive a meeting artifact (summary, highlights) from a recording.
+
+        Args:
+            incremental_mh_metadata: Set when this request covers one segment of a
+                meeting rather than a whole recording. It tells CW where the
+                segment sits in the meeting, so several artifacts from the same
+                meeting can be ordered and the last one recognised as the end.
+                Omitted entirely for a whole-recording request, which keeps the
+                payload unchanged for callers that do not segment.
 
         Raises:
             ValueError: If any required identifier is missing.
@@ -268,12 +277,14 @@ class CWUtilsClient(BaseHTTPClient):
         if missing:
             raise ValueError(f"missing required fields for artifact generation: {', '.join(missing)}")
 
-        payload = {
+        payload: dict[str, Any] = {
             **required,
             "model_type": model_type or self._settings.artifact_model_type,
             "large_language_model": large_language_model or self._settings.artifact_llm,
             "request_id": request_id or str(uuid.uuid4()),
         }
+        if incremental_mh_metadata is not None:
+            payload["incremental_mh_metadata"] = incremental_mh_metadata
 
         result = await self.post_json(
             self._ENDPOINT_MEETING_ARTIFACT,
