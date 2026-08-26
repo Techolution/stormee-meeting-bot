@@ -177,6 +177,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (stored.maxDurationSeconds !== undefined) DOM_CACHE.maxDurationSeconds.value = stored.maxDurationSeconds;
       if (typeof stored.generateIncrementalHighlights === 'boolean') {
         DOM_CACHE.generateIncrementalHighlights.checked = stored.generateIncrementalHighlights;
+      } else if (DOM_CACHE.generateIncrementalHighlights) {
+        // Default to true if no stored value exists
+        DOM_CACHE.generateIncrementalHighlights.checked = true;
       }
 
       if (stored.environment) {
@@ -408,9 +411,8 @@ document.getElementById('start-rec-btn').addEventListener('click', async () => {
     }
   }
 
-  if (DOM_CACHE.generateIncrementalHighlights && DOM_CACHE.generateIncrementalHighlights.checked) {
-    payload.generateIncrementalHighlights = true;
-  }
+  // Always send generateIncrementalHighlights - true by default, false if unchecked
+  payload.generateIncrementalHighlights = DOM_CACHE.generateIncrementalHighlights ? DOM_CACHE.generateIncrementalHighlights.checked : true;
 
   showStatus('Starting recording...');
 
