@@ -345,6 +345,8 @@ class MeetingSession:
                 raise
 
             self._state.recording.set(ComponentState.ACTIVE, transport=self._recorder.transport)
+            # Start MH services in the background (fire-and-forget)
+            self._deps.cw_client.startup_mh_services()
             await self._record_event(
                 MeetingLifecycleEvent.RECORDING_STARTED,
                 {"transport": self._recorder.transport},
