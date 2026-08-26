@@ -59,6 +59,7 @@ class CWUtilsClient(BaseHTTPClient):
     _ENDPOINT_UPLOAD_FILES = "/backend/gcs/upload-files/"
     _ENDPOINT_CONFIRM_UPLOAD = "/backend/gcs/confirm-upload"
     _ENDPOINT_MEETING_ARTIFACT = "/backend/meeting_mode_artifact/gen_mm_artifact_bg"
+    _ENDPOINT_STARTUP_MH_SERVICES = "/backend/meeting_mode_artifact/startup_mh_services"
 
     def __init__(self, settings: CWUtilsSettings) -> None:
         super().__init__(
@@ -303,6 +304,28 @@ class CWUtilsClient(BaseHTTPClient):
         """Deep link to a project in the CW UI."""
         return self._settings.project_url_template.format(project_id=project_id)
 
+    # ------------------------------------------------------------------
+    # MH services startup
+    # ------------------------------------------------------------------
+
+    def startup_mh_services(self) -> None:
+        """Start MH services in the background without blocking the caller.
+
+        Fire-and-forget operation that sends a simple POST request.
+        """
+        asyncio.create_task(self._startup_mh_services_request())
+
+    async def _startup_mh_services_request(self) -> None:
+        """Internal coroutine to request MH services startup."""
+        try:
+            await self.post_json(
+                self._ENDPOINT_STARTUP_MH_SERVICES,
+                operation="startup_mh_services",
+            )
+            logger.info("MH services startup requested")
+        except Exception:
+            logger.exception("Failed to start MH services")
+
 
 def _read_file(path: Path) -> bytes:
     """Read a file's bytes. Runs in a worker thread; see :meth:`CWUtilsClient.upload_file`.
@@ -313,3 +336,4 @@ def _read_file(path: Path) -> bytes:
     if not path.is_file():
         raise FileNotFoundError(f"not a readable file: {path}")
     return path.read_bytes()
+
