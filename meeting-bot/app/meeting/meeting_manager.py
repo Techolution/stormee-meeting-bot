@@ -207,6 +207,7 @@ class MeetingManager:
         meeting_id: str,
         max_duration_seconds: int | None = None,
         generate_incremental_highlights: bool = False,
+        mode_ids: list[str] | None = None,
     ) -> None:
         """Begin recording a meeting's audio.
 
@@ -214,10 +215,12 @@ class MeetingManager:
             meeting_id: The meeting identifier.
             max_duration_seconds: Optional maximum duration before auto-uploading this segment.
             generate_incremental_highlights: Whether to request highlights for segments.
+            mode_ids: Highlight mode identifiers for this recording only.
         """
         await self._sessions.require(meeting_id).start_recording(
             max_duration_seconds=max_duration_seconds,
             generate_incremental_highlights=generate_incremental_highlights,
+            mode_ids=mode_ids,
         )
 
     async def stop_recording(self, meeting_id: str) -> None:

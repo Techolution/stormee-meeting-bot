@@ -11,7 +11,8 @@ class StartRecordingRequest(CamelCaseModel):
     """Begin capturing meeting audio.
 
     Supports incremental segment recording with automatic upload and highlights
-    generation at specified duration intervals.
+    generation at specified duration intervals. Allows custom highlight model
+    configuration via highlight model types and categorization mode settings.
     """
 
     meeting_id: str = Field(..., alias="meetingId", min_length=1)
@@ -25,6 +26,11 @@ class StartRecordingRequest(CamelCaseModel):
         default=False,
         alias="generateIncrementalHighlights",
         description="If true, request highlights for each segment when max_duration_seconds is set.",
+    )
+    mode_ids: list[str] = Field(
+        default_factory=list,
+        alias="modeIds",
+        description="Optional: List of highlight categorization mode identifiers for custom highlight generation configuration.",
     )
 
 

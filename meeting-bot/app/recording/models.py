@@ -146,3 +146,4 @@ class RecordingContext:
     meeting_title: str | None = None
     user_name: str = ""
     user_email: str = ""
+    mode_ids: tuple[str, ...] = ()

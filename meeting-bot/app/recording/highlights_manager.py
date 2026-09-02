@@ -174,6 +174,7 @@ class HighlightsManager:
                 user_name=context.user_name,
                 request_id=segment_id,
                 incremental_mh_metadata=incremental_mh_metadata,
+                mode_ids=context.mode_ids,
             )
         except Exception as error:
             logger.warning(
@@ -214,4 +215,3 @@ class HighlightsManager:
             for seg in self._segments.values()
             if seg.meeting_id == meeting_id
         ]
-

@@ -160,6 +160,7 @@ class UploadFinalizer:
                 display_name=context.meeting_title or context.meeting_id,
                 user_email=context.user_email,
                 user_name=context.user_name,
+                mode_ids=context.mode_ids,
             )
         except Exception as error:  # noqa: BLE001 - follow-up work, not the recording
             logger.warning(

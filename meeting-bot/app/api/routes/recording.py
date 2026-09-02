@@ -33,6 +33,7 @@ async def start_recording(
         payload.meeting_id,
         max_duration_seconds=payload.max_duration_seconds,
         generate_incremental_highlights=payload.generate_incremental_highlights,
+        mode_ids=payload.mode_ids,
     )
     return RecordingActionResponse(message="Recording started", meeting_id=payload.meeting_id)
 

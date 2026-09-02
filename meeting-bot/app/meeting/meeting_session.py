@@ -313,12 +313,14 @@ class MeetingSession:
         self,
         max_duration_seconds: int | None = None,
         generate_incremental_highlights: bool = False,
+        mode_ids: list[str] | None = None,
     ) -> None:
         """Begin recording meeting audio.
 
         Args:
             max_duration_seconds: Optional maximum duration before auto-uploading segment.
             generate_incremental_highlights: Whether to request highlights for segments.
+            mode_ids: Highlight mode identifiers for this recording only.
 
         Raises:
             RecordingAlreadyActiveError: If a recording is already running.
@@ -336,6 +338,7 @@ class MeetingSession:
             self._recorder = self._build_recorder(
                 max_duration_seconds=max_duration_seconds,
                 generate_incremental_highlights=generate_incremental_highlights,
+                mode_ids=mode_ids,
             )
 
             try:
@@ -356,12 +359,14 @@ class MeetingSession:
         self,
         max_duration_seconds: int | None = None,
         generate_incremental_highlights: bool = False,
+        mode_ids: list[str] | None = None,
     ) -> Recorder:
         """Assemble the recording pipeline for the configured transport.
 
         Args:
             max_duration_seconds: Optional maximum duration before auto-uploading segment.
             generate_incremental_highlights: Whether to request highlights for segments.
+            mode_ids: Highlight mode identifiers for this recording only.
         """
         assert self._platform is not None
         stats = RecordingStats()
@@ -370,7 +375,7 @@ class MeetingSession:
         return Recorder(
             platform=self._platform,
             uploader=uploader,
-            context=self._request.to_recording_context(),
+            context=self._request.to_recording_context(mode_ids=mode_ids),
             finalizer=UploadFinalizer(
                 cw_client=self._deps.cw_client,
                 mail_client=self._deps.mail_client,

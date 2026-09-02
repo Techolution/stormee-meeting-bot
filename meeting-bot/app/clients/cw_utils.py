@@ -58,7 +58,7 @@ class CWUtilsClient(BaseHTTPClient):
     _ENDPOINT_SIGNED_URLS = "/backend/gcs/generate-upload-signed-urls"
     _ENDPOINT_UPLOAD_FILES = "/backend/gcs/upload-files/"
     _ENDPOINT_CONFIRM_UPLOAD = "/backend/gcs/confirm-upload"
-    _ENDPOINT_MEETING_ARTIFACT = "/backend/meeting_mode_artifact/gen_mm_artifact_bg"
+    _ENDPOINT_MEETING_ARTIFACT = "/backend/meeting_mode_artifact/gen_mm_artifact_latest_bg"
     _ENDPOINT_STARTUP_MH_SERVICES = "/backend/meeting_mode_artifact/startup_mh_services"
 
     def __init__(self, settings: CWUtilsSettings) -> None:
@@ -252,6 +252,7 @@ class CWUtilsClient(BaseHTTPClient):
         large_language_model: str | None = None,
         request_id: str | None = None,
         incremental_mh_metadata: dict[str, Any] | None = None,
+        mode_ids: tuple[str, ...] | list[str] | None = None,
     ) -> dict[str, Any]:
         """Ask CW to derive a meeting artifact (summary, highlights) from a recording.
 
@@ -277,15 +278,34 @@ class CWUtilsClient(BaseHTTPClient):
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise ValueError(f"missing required fields for artifact generation: {', '.join(missing)}")
-
         payload: dict[str, Any] = {
             **required,
             "model_type": model_type or self._settings.artifact_model_type,
             "large_language_model": large_language_model or self._settings.artifact_llm,
             "request_id": request_id or str(uuid.uuid4()),
         }
+
+        segment_number = (
+            incremental_mh_metadata.get("segment_number")
+            if incremental_mh_metadata is not None
+            else None
+        )
+        if segment_number in (None, 1):
+            premade_artifact_id = str(uuid.uuid4())
+            payload["premade_artifact_id"] = premade_artifact_id
+            logger.info(
+                "Premade artifact ID created for first recording segment",
+                extra={
+                    "premade_artifact_id": premade_artifact_id,
+                    "project_id": project_id,
+                    "audio_name": audio_name,
+                },
+            )
+
         if incremental_mh_metadata is not None:
             payload["incremental_mh_metadata"] = incremental_mh_metadata
+        if mode_ids:
+            payload["selected_modes"] = list(mode_ids)
 
         result = await self.post_json(
             self._ENDPOINT_MEETING_ARTIFACT,
@@ -295,8 +315,12 @@ class CWUtilsClient(BaseHTTPClient):
         )
 
         logger.info(
-            f"Meeting artifact generation requested request_id :{request_id}",
-            extra={"project_id": project_id, "audio_name": audio_name},
+            "Meeting artifact generation requested",
+            extra={
+                "request_id": payload["request_id"],
+                "project_id": project_id,
+                "audio_name": audio_name,
+            },
         )
         return result
 
@@ -336,4 +360,3 @@ def _read_file(path: Path) -> bytes:
     if not path.is_file():
         raise FileNotFoundError(f"not a readable file: {path}")
     return path.read_bytes()
-

@@ -56,7 +56,7 @@ class MeetingRequest:
             meeting_title=meeting_title or f"Meeting {datetime.now(timezone.utc):%Y-%m-%d}",
         )
 
-    def to_recording_context(self) -> RecordingContext:
+    def to_recording_context(self, *, mode_ids: list[str] | None = None) -> RecordingContext:
         """Attribution the recording pipeline needs to register its upload."""
         return RecordingContext(
             meeting_id=self.meeting_id,
@@ -65,6 +65,7 @@ class MeetingRequest:
             meeting_title=self.meeting_title,
             user_name=self.user_name,
             user_email=self.user_email,
+            mode_ids=tuple(mode_ids or ()),
         )
 
 
