@@ -285,6 +285,7 @@ class CWUtilsClient(BaseHTTPClient):
             "request_id": request_id or str(uuid.uuid4()),
         }
 
+        premade_artifact_id: str | None = None
         segment_number = (
             incremental_mh_metadata.get("segment_number")
             if incremental_mh_metadata is not None
@@ -313,6 +314,10 @@ class CWUtilsClient(BaseHTTPClient):
             json=payload,
             headers={"Content-Type": "application/json"},
         )
+        if premade_artifact_id is not None:
+            # The upstream response does not have to echo a caller-provided ID,
+            # but the recording finalizer needs it to build the email link.
+            result = {**result, "premade_artifact_id": premade_artifact_id}
 
         logger.info(
             "Meeting artifact generation requested",
@@ -327,6 +332,10 @@ class CWUtilsClient(BaseHTTPClient):
     def project_url(self, project_id: str) -> str:
         """Deep link to a project in the CW UI."""
         return self._settings.project_url_template.format(project_id=project_id)
+
+    def transcription_url(self, artifact_id: str) -> str:
+        """Deep link to a premade artifact in Transcription Mode."""
+        return self._settings.transcription_url_template.format(artifact_id=artifact_id)
 
     # ------------------------------------------------------------------
     # MH services startup

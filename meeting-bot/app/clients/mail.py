@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from app.clients.base import BaseHTTPClient
-from app.clients.templates import render_meeting_file_uploaded
+from app.clients.templates import render_meeting_artifact_ready, render_meeting_file_uploaded
 from app.core.config import MailSettings
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,28 @@ class MailClient(BaseHTTPClient):
             project_url=project_url,
             meeting_title=meeting_title,
             file_type=file_type,
+        )
+        return await self.send(
+            to_email=user_email,
+            subject=subject,
+            html_body=html,
+            cc=cc or "",
+        )
+
+    async def send_meeting_artifact_ready(
+        self,
+        *,
+        user_name: str,
+        user_email: str,
+        meeting_title: str,
+        artifact_url: str,
+        cc: str | None = None,
+    ) -> bool:
+        """Tell a user the first meeting artifact is ready to open."""
+        subject, html = render_meeting_artifact_ready(
+            user_name=user_name,
+            meeting_title=meeting_title,
+            artifact_url=artifact_url,
         )
         return await self.send(
             to_email=user_email,

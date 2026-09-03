@@ -154,7 +154,7 @@ class UploadFinalizer:
         """Ask CW to derive a meeting artifact from the recording."""
         assert context.project_id is not None
         try:
-            await self._cw.generate_meeting_artifact(
+            result = await self._cw.generate_meeting_artifact(
                 audio_name=filename,
                 project_id=context.project_id,
                 display_name=context.meeting_title or context.meeting_id,
@@ -162,6 +162,8 @@ class UploadFinalizer:
                 user_name=context.user_name,
                 mode_ids=context.mode_ids,
             )
+            if artifact_id := result.get("premade_artifact_id"):
+                await self._notify_artifact_ready(context, artifact_id)
         except Exception as error:  # noqa: BLE001 - follow-up work, not the recording
             logger.warning(
                 "Could not request meeting artifact generation",
@@ -211,12 +213,30 @@ class UploadFinalizer:
                     "Incremental highlights generated",
                     extra={"segment_id": segment.segment_id},
                 )
+                if segment.premade_artifact_id:
+                    await self._notify_artifact_ready(
+                        context, segment.premade_artifact_id
+                    )
         except Exception as error:  # noqa: BLE001 - follow-up work, not the recording
             logger.warning(
                 "Could not request incremental highlights",
                 exc_info=error,
                 extra={"meeting_id": context.meeting_id},
             )
+
+    async def _notify_artifact_ready(
+        self, context: RecordingContext, artifact_id: str
+    ) -> None:
+        """Email the first artifact's Transcription Mode link."""
+        if self._mail is None or not self._mail.enabled or not context.user_email:
+            return
+
+        await self._mail.send_meeting_artifact_ready(
+            user_name=context.user_name,
+            user_email=context.user_email,
+            meeting_title=context.meeting_title or context.meeting_id,
+            artifact_url=self._cw.transcription_url(artifact_id),
+        )
 
     async def _notify_user(self, context: RecordingContext) -> None:
         """Email the requesting user that their recording is available."""

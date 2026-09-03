@@ -29,6 +29,7 @@ class HighlightSegment:
     start_seconds: float = 0.0
     audio_filename: str = ""
     request_id: str | None = None
+    premade_artifact_id: str | None = None
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def as_dict(self) -> dict[str, Any]:
@@ -41,6 +42,7 @@ class HighlightSegment:
             "start_seconds": self.start_seconds,
             "audio_filename": self.audio_filename,
             "request_id": self.request_id,
+            "premade_artifact_id": self.premade_artifact_id,
             "generated_at": self.generated_at.isoformat(),
         }
 
@@ -192,6 +194,7 @@ class HighlightsManager:
             start_seconds=last_duration,
             audio_filename=audio_filename,
             request_id=result.get("request_id"),
+            premade_artifact_id=result.get("premade_artifact_id"),
         )
 
         self._segments[segment_id] = segment

@@ -387,6 +387,11 @@ class CWUtilsSettings(BaseSettings):
         validation_alias=AliasChoices("CW_PROJECT_URL_TEMPLATE"),
         description="Used to deep-link users to a project from notification email.",
     )
+    transcription_url_template: str = Field(
+        default="https://dev.appmod.ai/artifact/{artifact_id}/mode/Transcription%20Mode",
+        validation_alias=AliasChoices("CW_TRANSCRIPTION_URL_TEMPLATE"),
+        description="Deep link to the first premade meeting artifact.",
+    )
     artifact_model_type: str = Field(
         default="google",
         validation_alias=AliasChoices("CW_ARTIFACT_MODEL_TYPE"),
