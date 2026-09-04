@@ -56,6 +56,10 @@ class SessionRegistry:
     def is_full(self) -> bool:
         return bool(self._max_sessions) and len(self._sessions) >= self._max_sessions
 
+    @staticmethod
+    def _normalise_meeting_id(meeting_id: str | int) -> str:
+        return str(meeting_id).strip()
+
     async def add(self, session: MeetingSession) -> None:
         """Register a session.
 
@@ -64,7 +68,7 @@ class SessionRegistry:
                 the process is at capacity.
         """
         async with self._lock:
-            meeting_id = session.meeting_id
+            meeting_id = self._normalise_meeting_id(session.meeting_id)
             if meeting_id in self._sessions:
                 raise MeetingAlreadyActiveError(meeting_id)
             if self.is_full:
@@ -84,18 +88,19 @@ class SessionRegistry:
 
     async def remove(self, meeting_id: str) -> MeetingSession | None:
         """Deregister a session. Returns it, or ``None`` if it was not registered."""
+        key = self._normalise_meeting_id(meeting_id)
         async with self._lock:
-            session = self._sessions.pop(meeting_id, None)
+            session = self._sessions.pop(key, None)
             if session is not None:
                 logger.info(
                     "Session deregistered",
-                    extra={"meeting_id": meeting_id, "active_sessions": len(self._sessions)},
+                    extra={"meeting_id": key, "active_sessions": len(self._sessions)},
                 )
             return session
 
     def get(self, meeting_id: str) -> MeetingSession | None:
         """Look up a session, or ``None``."""
-        return self._sessions.get(meeting_id)
+        return self._sessions.get(self._normalise_meeting_id(meeting_id))
 
     def require(self, meeting_id: str) -> MeetingSession:
         """Look up a session.
@@ -103,9 +108,10 @@ class SessionRegistry:
         Raises:
             MeetingNotFoundError: If there is no session for this meeting.
         """
-        session = self._sessions.get(meeting_id)
+        key = self._normalise_meeting_id(meeting_id)
+        session = self._sessions.get(key)
         if session is None:
-            raise MeetingNotFoundError(meeting_id)
+            raise MeetingNotFoundError(key)
         return session
 
     def all(self) -> list[MeetingSession]:

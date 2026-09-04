@@ -41,10 +41,12 @@ class JoinMeetingRequest(CamelCaseModel):
             raise ValueError("meetingUrl must be an absolute http(s) URL")
         return candidate
 
-    @field_validator("meeting_id")
+    @field_validator("meeting_id", mode="before")
     @classmethod
-    def _validate_meeting_id(cls, value: str) -> str:
-        candidate = value.strip()
+    def _validate_meeting_id(cls, value: str | int | None) -> str:
+        if value is None:
+            raise ValueError("meetingId must not be blank")
+        candidate = str(value).strip()
         if not candidate:
             raise ValueError("meetingId must not be blank")
         return candidate

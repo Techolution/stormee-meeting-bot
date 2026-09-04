@@ -20,6 +20,16 @@ class CreateSessionRequest(BaseModel):
     meeting_url: str = Field(..., description="Absolute meeting URL")
     scheduled_at: Optional[datetime] = None
 
+    @field_validator("meeting_id", mode="before")
+    @classmethod
+    def _normalise_meeting_id(cls, value: object) -> str:
+        if value is None:
+            raise ValueError("meeting_id must not be blank")
+        candidate = str(value).strip()
+        if not candidate:
+            raise ValueError("meeting_id must not be blank")
+        return candidate
+
     # Pins the session to a specific bot pod, bypassing discovery. For local
     # development and for re-attaching to a known pod.
     bot_service_url: Optional[str] = Field(default=None, description="Explicit bot pod URL")

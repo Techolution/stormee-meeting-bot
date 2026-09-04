@@ -28,6 +28,9 @@ class MeetingRequest:
     meeting_title: str | None = None
     requested_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "meeting_id", str(self.meeting_id).strip())
+
     @classmethod
     def build(
         cls,

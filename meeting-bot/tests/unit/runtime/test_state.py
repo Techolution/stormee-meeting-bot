@@ -118,6 +118,16 @@ async def test_removing_frees_the_slot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_numeric_meeting_ids_are_normalized_before_lookup() -> None:
+    registry = SessionRegistry()
+    await registry.add(_Session(1234))  # type: ignore[arg-type]
+
+    assert registry.get("1234") is not None
+    assert registry.require(1234) is not None
+    assert list(registry._sessions) == ["1234"]
+
+
+@pytest.mark.asyncio
 async def test_clear_returns_everything_for_shutdown() -> None:
     registry = SessionRegistry()
     await registry.add(_Session("m1"))  # type: ignore[arg-type]
