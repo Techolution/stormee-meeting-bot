@@ -168,6 +168,7 @@ class HighlightsManager:
                 "duration_seconds": stats.duration_seconds,
                 "last_duration": last_duration,
                 "is_final": is_final,
+                "participants": participants or []
             },
         )
 
