@@ -97,6 +97,15 @@ class MeetingPlatform(ABC):
         message ids it has already seen.
         """
 
+    @abstractmethod
+    def get_active_speaker_names(self) -> list[str]:
+        """Names of every participant observed speaking since the meeting began.
+
+        Ordered by first appearance, deduplicated, with stable numbered labels
+        (``"Speaker 0"``, ``"Speaker 1"``, ...) for participants whose names
+        could not be read. Empty when observation has produced nothing yet.
+        """
+
     # ------------------------------------------------------------------
     # Media controls
     # ------------------------------------------------------------------

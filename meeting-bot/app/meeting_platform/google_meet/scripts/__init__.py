@@ -16,6 +16,9 @@ Layout:
                          and pushes chunks to Python. Called with a meeting id
                          and the timeslice to chunk at.
   ``recorder_stop.js``   Stops the recorder and flushes the final chunk.
+  ``participants.js``    Tracks Meet's active speaker indicator via a
+                         MutationObserver for the whole meeting, reporting
+                         speaker changes to Python to build the roster.
 """
 
 from __future__ import annotations

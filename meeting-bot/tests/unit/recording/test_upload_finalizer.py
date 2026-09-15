@@ -165,3 +165,23 @@ async def test_without_the_flag_a_recording_still_gets_one_artifact(
     await finalizer.finalize(context, _uploaded(), stats=RecordingStats())
 
     assert len(cw.artifacts) == 1
+
+
+async def test_participants_are_attached_to_highlights_request(
+    context: RecordingContext,
+) -> None:
+    """The participant roster rides along with each incremental segment request."""
+    cw = FakeCWClient()
+    finalizer = UploadFinalizer(cw_client=cw, highlights_manager=_highlights(cw))
+    stats = RecordingStats(started_at=datetime.now(timezone.utc) - timedelta(minutes=30))
+
+    await finalizer.finalize(
+        context, _uploaded("part1.webm"), stats=stats,
+        is_final_segment=False, segment_number=1,
+        generate_incremental_highlights=True,
+        participants=["Alice", "Bob"],
+    )
+
+    assert len(cw.artifacts) == 1
+    metadata = cw.artifacts[0]["incremental_mh_metadata"]
+    assert metadata["participants"] == ["Alice", "Bob"]

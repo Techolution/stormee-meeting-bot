@@ -128,6 +128,7 @@ class FakePlatform(MeetingPlatform):
         self.played: list[AudioPlaybackRequest] = []
         self.sink: ChunkSink | None = None
         self._caption_index = 0
+        self.speaker_names: list[str] = []
 
     async def join(self, request: JoinRequest) -> JoinResult:
         return JoinResult(admitted=True, state=MeetingRoomState.IN_MEETING, waited_seconds=0.1)
@@ -155,6 +156,9 @@ class FakePlatform(MeetingPlatform):
 
     async def get_chat_messages(self) -> list[ChatMessage]:
         return list(self.chat_script)
+
+    def get_active_speaker_names(self) -> list[str]:
+        return list(self.speaker_names)
 
     async def mute_microphone(self) -> bool:
         self.mic_on = False

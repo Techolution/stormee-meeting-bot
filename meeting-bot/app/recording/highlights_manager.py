@@ -108,6 +108,7 @@ class HighlightsManager:
         audio_filename: str,
         segment_number: int = 1,
         is_final: bool = False,
+        participants: list[str] | None = None,
     ) -> HighlightSegment | None:
         """Generate highlights for the current recording state.
 
@@ -120,6 +121,8 @@ class HighlightsManager:
                 threshold is skipped in that case: the tail of a meeting is
                 whatever is left after the last boundary, so holding it to a
                 minimum length would silently drop the closing segment.
+            participants: Names of everyone who has spoken so far, attached
+                to the artifact request so CW can attribute the segment.
 
         Returns:
             HighlightSegment if generation was requested, None if skipped.
@@ -154,6 +157,7 @@ class HighlightsManager:
             "segment_number": segment_number,
             "last_duration": last_duration,
             "is_final": is_final,
+            "participants": participants or [],
         }
 
         logger.info(
