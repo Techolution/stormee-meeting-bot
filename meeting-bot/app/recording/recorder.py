@@ -194,6 +194,16 @@ class Recorder:
             # Finalize remaining audio as the final segment
             # This handles: 1) recordings that never reached max_duration_seconds,
             # or 2) the remaining audio after the last auto-uploaded segment
+            final_participants = self._participant_names()
+            logger.info(
+                "Sending final segment with speakers",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "segment_number": self._segment_number,
+                    "speakers": final_participants,
+                    "speaker_count": len(final_participants),
+                },
+            )
             await self._finalizer.finalize(
                 context=self._context,
                 outcome=outcome,
@@ -201,7 +211,7 @@ class Recorder:
                 is_final_segment=True,  # This is the end of recording
                 segment_number=self._segment_number,  # Current segment (last one)
                 generate_incremental_highlights=self._generate_incremental_highlights,
-                participants=self._participant_names(),
+                participants=final_participants,
             )
 
         return outcome
@@ -257,6 +267,16 @@ class Recorder:
 
         # Request highlights/artifacts for this segment (not final)
         if self._finalizer is not None:
+            current_participants = self._participant_names()
+            logger.info(
+                "Sending incremental segment with speakers",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "segment_number": self._segment_number,
+                    "speakers": current_participants,
+                    "speaker_count": len(current_participants),
+                },
+            )
             await self._finalizer.finalize(
                 context=self._context,
                 outcome=outcome,
@@ -264,7 +284,7 @@ class Recorder:
                 is_final_segment=False,
                 segment_number=self._segment_number,
                 generate_incremental_highlights=self._generate_incremental_highlights,
-                participants=self._participant_names(),
+                participants=current_participants,
             )
 
         # Update segment tracking

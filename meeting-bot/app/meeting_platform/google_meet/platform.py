@@ -154,7 +154,15 @@ class GoogleMeetPlatform(MeetingPlatform):
         ``"Speaker 1"``, ... — counted across the meeting, so one unnamed
         person is not reported as many.
         """
-        return [self._participant_id_to_name[pid] for pid in self._participant_order]
+        speakers = [self._participant_id_to_name[pid] for pid in self._participant_order]
+        logger.info(
+            "get_active_speaker_names called",
+            extra={
+                "speakers": speakers,
+                "speaker_count": len(speakers),
+            },
+        )
+        return speakers
 
     # ------------------------------------------------------------------
     # Join
@@ -365,7 +373,15 @@ class GoogleMeetPlatform(MeetingPlatform):
                 self._fallback_speaker_count += 1
             if participant_id not in self._participant_id_to_name:
                 self._participant_order.append(participant_id)
-                logger.debug("Participant observed", extra={"name": name, "participant_id": participant_id})
+                logger.info(
+                    "Speaker added to speakers array",
+                    extra={
+                        "name": name,
+                        "participant_id": participant_id,
+                        "current_speakers": [self._participant_id_to_name.get(pid, pid) for pid in self._participant_order],
+                        "total_speakers": len(self._participant_order),
+                    },
+                )
             self._participant_id_to_name[participant_id] = name
 
         await self._browser.expose_function(_PARTICIPANTS_CALLBACK, _receive)
