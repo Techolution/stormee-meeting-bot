@@ -253,6 +253,7 @@ class CWUtilsClient(BaseHTTPClient):
         request_id: str | None = None,
         incremental_mh_metadata: dict[str, Any] | None = None,
         mode_ids: tuple[str, ...] | list[str] | None = None,
+        participants: list[str] | None = None,
     ) -> dict[str, Any]:
         """Ask CW to derive a meeting artifact (summary, highlights) from a recording.
 
@@ -263,6 +264,9 @@ class CWUtilsClient(BaseHTTPClient):
                 meeting can be ordered and the last one recognised as the end.
                 Omitted entirely for a whole-recording request, which keeps the
                 payload unchanged for callers that do not segment.
+            participants: Names of everyone who has spoken so far in the
+                meeting. Sent on every artifact request so downstream work can
+                attribute the recording to its participants.
 
         Raises:
             ValueError: If any required identifier is missing.
@@ -307,6 +311,8 @@ class CWUtilsClient(BaseHTTPClient):
             payload["incremental_mh_metadata"] = incremental_mh_metadata
         if mode_ids:
             payload["selected_modes"] = list(mode_ids)
+        if participants:
+            payload["participants"] = list(participants)
 
         result = await self.post_json(
             self._ENDPOINT_MEETING_ARTIFACT,

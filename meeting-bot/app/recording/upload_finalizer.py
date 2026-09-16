@@ -48,6 +48,7 @@ class UploadFinalizer:
         is_final_segment: bool = True,
         segment_number: int = 1,
         generate_incremental_highlights: bool = False,
+        participants: list[str] | None = None,
     ) -> bool:
         """Confirm the upload with CW and start follow-up processing.
 
@@ -63,6 +64,8 @@ class UploadFinalizer:
                 False if this is an incremental segment upload.
             segment_number: Which segment this is (1, 2, 3, ...) for labeling.
             generate_incremental_highlights: If True, request highlights for this segment.
+            participants: Names of everyone who has spoken so far, attached
+                to artifact requests so downstream work knows the participants.
 
         Returns:
             True if CW accepted the confirmation. False when the step was
@@ -129,10 +132,10 @@ class UploadFinalizer:
         # tellable apart. Without one, a plain request is all that is on offer.
         if generate_incremental_highlights and self._highlights is not None and stats is not None:
             await self._request_incremental_highlights(
-                context, uploaded.filename, stats, segment_number, is_final_segment
+                context, uploaded.filename, stats, segment_number, is_final_segment, participants
             )
         else:
-            await self._request_artifact(context, uploaded.filename)
+            await self._request_artifact(context, uploaded.filename, participants)
 
         if is_final_segment:
             await self._notify_user(context)
@@ -150,7 +153,9 @@ class UploadFinalizer:
             return "nothing was uploaded"
         return None
 
-    async def _request_artifact(self, context: RecordingContext, filename: str) -> None:
+    async def _request_artifact(
+        self, context: RecordingContext, filename: str, participants: list[str] | None = None
+    ) -> None:
         """Ask CW to derive a meeting artifact from the recording."""
         assert context.project_id is not None
         try:
@@ -161,6 +166,7 @@ class UploadFinalizer:
                 user_email=context.user_email,
                 user_name=context.user_name,
                 mode_ids=context.mode_ids,
+                participants=participants,
             )
             if artifact_id := result.get("premade_artifact_id"):
                 await self._notify_artifact_ready(context, artifact_id)
@@ -177,6 +183,7 @@ class UploadFinalizer:
         stats: RecordingStats,
         segment_number: int = 1,
         is_final: bool = False,
+        participants: list[str] | None = None,
     ) -> None:
         """Request highlights for an incremental segment of a recording.
 
@@ -187,6 +194,7 @@ class UploadFinalizer:
             segment_number: Which segment this is (1, 2, 3, ...) for labeling.
             is_final: True when this segment ends the meeting, so CW can tell
                 the closing segment from the ones before it.
+            participants: Names of everyone who has spoken so far.
         """
         if self._highlights is None:
             logger.warning(
@@ -202,6 +210,7 @@ class UploadFinalizer:
                 audio_filename=filename,
                 segment_number=segment_number,
                 is_final=is_final,
+                participants=participants,
             )
             if segment is None:
                 logger.debug(

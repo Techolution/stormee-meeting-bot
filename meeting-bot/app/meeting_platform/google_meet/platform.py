@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 #: Name of the page callback the recorder pushes chunks into.
 _CHUNK_CALLBACK = "sendAudioChunkToPython"
 
+#: Name of the page callback used by the participants tracker (participants.js).
+_PARTICIPANTS_CALLBACK = "sendActiveSpeakerToPython"
+
 _MERGED_AUDIO_HEADER = re.compile(
     r"^(?P<name>.+?)\s*&\s*(?P<count>\d+)\s+others?\b\s*(?P<speech>.*)$",
     re.IGNORECASE,
@@ -120,6 +123,7 @@ class GoogleMeetPlatform(MeetingPlatform):
         self._captions_script = load_script("captions.js")
         self._chat_script = load_script("chat_messages.js")
         self._play_audio_script = load_script("play_audio.js")
+        self._active_speaker_script = load_script("participants.js")
 
         self._left = False
         self._recording = False
@@ -127,11 +131,38 @@ class GoogleMeetPlatform(MeetingPlatform):
         #: than captured by the callback, because the callback outlives any one
         #: recording. See bind_chunk_sink.
         self._chunk_sink: ChunkSink | None = None
+        #: Participant id -> resolved display name, as reported by the participants
+        #: tracker (participants.js), which runs for the whole meeting.
+        self._participant_id_to_name: dict[str, str] = {}
+        #: Participant ids in order of first appearance while speaking.
+        self._participant_order: list[str] = []
+        #: Counter for unnamed speakers, so each receives a stable label.
+        self._fallback_speaker_count = 0
 
     @property
     def actions(self) -> GoogleMeetActions:
         """Direct access to UI operations, for flows the interface does not cover."""
         return self._actions
+
+    def get_active_speaker_names(self) -> list[str]:
+        """Names of everyone observed speaking, in order of first appearance.
+
+        Sourced from the page-side participants tracker (``participants.js``),
+        which inspects participant tiles for Meet's speaking indicator. Runs
+        for the whole meeting, independent of transcription. Speakers whose
+        names cannot be read receive stable numbered labels — ``"Speaker 0"``,
+        ``"Speaker 1"``, ... — counted across the meeting, so one unnamed
+        person is not reported as many.
+        """
+        speakers = [self._participant_id_to_name[pid] for pid in self._participant_order]
+        logger.info(
+            "get_active_speaker_names called",
+            extra={
+                "speakers": speakers,
+                "speaker_count": len(speakers),
+            },
+        )
+        return speakers
 
     # ------------------------------------------------------------------
     # Join
@@ -173,6 +204,8 @@ class GoogleMeetPlatform(MeetingPlatform):
         # Meet occasionally restores the microphone on entry; make sure the bot
         # is silent before anyone hears it.
         await self._ensure_muted()
+
+        await self._start_participant_tracker()
 
         return JoinResult(
             admitted=True,
@@ -236,6 +269,7 @@ class GoogleMeetPlatform(MeetingPlatform):
         if self._left or not self._browser.is_available:
             return
         self._left = True
+        await self._stop_participant_tracker()
 
         if await self._actions.leave_call():
             logger.info("Left the meeting")
@@ -314,15 +348,58 @@ class GoogleMeetPlatform(MeetingPlatform):
 
         blocks = _normalise_merged_audio_blocks(blocks or [])
         captured_at = datetime.now(timezone.utc)
-        return [
-            CaptionLine(
-                speaker=block.get("speaker", "").strip(),
-                text=block.get("text", "").strip(),
-                captured_at=captured_at,
+        captions: list[CaptionLine] = []
+        for block in blocks:
+            text = block.get("text", "").strip()
+            if not text:
+                continue
+            speaker = block.get("speaker", "").strip()
+            captions.append(CaptionLine(speaker=speaker, text=text, captured_at=captured_at))
+        return captions
+
+    async def _start_participant_tracker(self) -> None:
+        """Install the page-side participants tracker and bind its callback."""
+        if not self._browser.is_available:
+            return
+
+        async def _receive(payload: dict) -> None:
+            participant_id = payload.get("id") or None
+            name = payload.get("name") or None
+            if participant_id is None:
+                # "Silence" transition — no one is speaking right now.
+                return
+            if not name:
+                name = f"Speaker {self._fallback_speaker_count}"
+                self._fallback_speaker_count += 1
+            if participant_id not in self._participant_id_to_name:
+                self._participant_order.append(participant_id)
+                logger.info(
+                    "Speaker added to speakers array",
+                    extra={
+                        "name": name,
+                        "participant_id": participant_id,
+                        "current_speakers": [self._participant_id_to_name.get(pid, pid) for pid in self._participant_order],
+                        "total_speakers": len(self._participant_order),
+                    },
+                )
+            self._participant_id_to_name[participant_id] = name
+
+        await self._browser.expose_function(_PARTICIPANTS_CALLBACK, _receive)
+        await self._browser.evaluate(
+            self._active_speaker_script, {"action": "start", "callbackName": _PARTICIPANTS_CALLBACK}
+        )
+
+    async def _stop_participant_tracker(self) -> None:
+        """Tear the tracker down. No-ops when it is not running."""
+        if not self._browser.is_available:
+            return
+        try:
+            await self._browser.evaluate(
+                self._active_speaker_script,
+                {"action": "stop", "callbackName": _PARTICIPANTS_CALLBACK},
             )
-            for block in blocks
-            if block.get("text", "").strip()
-        ]
+        except Exception as error:  # noqa: BLE001 - leave must never fail over this
+            logger.debug("Could not stop participants tracker", extra={"reason": str(error)})
 
     async def get_chat_messages(self) -> list[ChatMessage]:
         """Every chat message currently in the panel."""

@@ -63,7 +63,7 @@ class Recorder:
             stats=self._stats,
         )
         self._lock = asyncio.Lock()
-        
+
         # For incremental segment uploads: track which segment we're on and when last upload occurred
         self._segment_number = 1  # Current segment number (1-indexed)
         self._last_segment_upload_duration = 0.0  # Duration (in seconds) at which last segment was uploaded
@@ -194,6 +194,16 @@ class Recorder:
             # Finalize remaining audio as the final segment
             # This handles: 1) recordings that never reached max_duration_seconds,
             # or 2) the remaining audio after the last auto-uploaded segment
+            final_participants = self._participant_names()
+            logger.info(
+                "Sending final segment with speakers",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "segment_number": self._segment_number,
+                    "speakers": final_participants,
+                    "speaker_count": len(final_participants),
+                },
+            )
             await self._finalizer.finalize(
                 context=self._context,
                 outcome=outcome,
@@ -201,6 +211,7 @@ class Recorder:
                 is_final_segment=True,  # This is the end of recording
                 segment_number=self._segment_number,  # Current segment (last one)
                 generate_incremental_highlights=self._generate_incremental_highlights,
+                participants=final_participants,
             )
 
         return outcome
@@ -243,7 +254,7 @@ class Recorder:
         """
         # Finalize the current segment upload
         outcome = await self._uploader.finalize()
-        
+
         logger.info(
             "Segment upload finalized",
             extra={
@@ -253,9 +264,19 @@ class Recorder:
                 "bytes": outcome.uploaded_bytes,
             },
         )
-        
+
         # Request highlights/artifacts for this segment (not final)
         if self._finalizer is not None:
+            current_participants = self._participant_names()
+            logger.info(
+                "Sending incremental segment with speakers",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "segment_number": self._segment_number,
+                    "speakers": current_participants,
+                    "speaker_count": len(current_participants),
+                },
+            )
             await self._finalizer.finalize(
                 context=self._context,
                 outcome=outcome,
@@ -263,12 +284,13 @@ class Recorder:
                 is_final_segment=False,
                 segment_number=self._segment_number,
                 generate_incremental_highlights=self._generate_incremental_highlights,
+                participants=current_participants,
             )
-        
+
         # Update segment tracking
         self._last_segment_upload_duration = self._stats.duration_seconds
         self._segment_number += 1
-        
+
         logger.info(
             "Preparing next segment for recording",
             extra={
@@ -276,11 +298,15 @@ class Recorder:
                 "next_segment_number": self._segment_number,
             },
         )
-        
+
         # Re-initialize uploader for the next segment
         # For direct uploads, this creates a new resumable URL
         # For streaming, this updates context and lets audio service handle segmentation
         await self._uploader.reinitialize(self._context)
+
+    def _participant_names(self) -> list[str]:
+        """Names of everyone who has spoken so far, for segment attribution."""
+        return self._platform.get_active_speaker_names()
 
     # ------------------------------------------------------------------
     # Internals
