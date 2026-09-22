@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from app.core.exceptions import ExternalServiceError
+from app.clients.cw_auth_utils import generate_headers_with_signature
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class BaseHTTPClient:
         self._default_headers = dict(headers or {})
         self._client: httpx.AsyncClient | None = None
         self._lock = asyncio.Lock()
+        self.auth_headers = generate_headers_with_signature()
 
     @property
     def base_url(self) -> str:
@@ -66,7 +68,7 @@ class BaseHTTPClient:
                 if self._client is None or self._client.is_closed:
                     self._client = httpx.AsyncClient(
                         timeout=httpx.Timeout(self._timeout),
-                        headers={"accept": "application/json", **self._default_headers},
+                        headers={"accept": "application/json", **self._default_headers, **self.auth_headers},
                         follow_redirects=True,
                     )
         return self._client
