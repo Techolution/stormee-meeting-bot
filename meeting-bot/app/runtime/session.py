@@ -1,6 +1,6 @@
 """Session registry.
 
-Tracks the sessions this process is running, keyed by meeting id. Small on
+Tracks the sessions this process is running, keyed by session id. Small on
 purpose: it holds references and enforces uniqueness, and knows nothing about
 what a session does.
 
@@ -9,18 +9,14 @@ returned the existing bot when asked to join a meeting twice, which quietly
 turned a duplicate request into a success and left the caller believing a fresh
 join had happened.
 
-Rejoining the *same* meeting is a different case, and a legitimate one: a
-meeting recorded twice, or rejoined after the first bot was evicted, is two
-sessions that must be told apart. :meth:`SessionRegistry.reserve_meeting_id`
-resolves that by handing out a suffixed key rather than rejecting the join, so
-the caller-supplied id is a starting point rather than a constraint.
+Rejoining the same room creates a new session ID. Exact duplicate active
+session IDs are rejected rather than silently rewritten.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
@@ -55,14 +51,15 @@ class SessionRegistry:
     def __len__(self) -> int:
         return len(self._sessions)
 
-    def __contains__(self, meeting_id: object) -> bool:
-        return meeting_id in self._sessions
+    def __contains__(self, session_id: object) -> bool:
+        return session_id in self._sessions
 
     def __iter__(self) -> Iterator[MeetingSession]:
         return iter(list(self._sessions.values()))
 
     @property
     def meeting_ids(self) -> list[str]:
+        """Backward-compatible name for the registered session ID list."""
         return sorted(self._sessions)
 
     @property
@@ -73,34 +70,22 @@ class SessionRegistry:
         """True when an id is registered or spoken for. Caller holds the lock."""
         return meeting_id in self._sessions or meeting_id in self._reserved
 
-    async def reserve_meeting_id(self, desired: str) -> str:
-        """Claim a free session key, deriving one from ``desired`` if it is taken.
-
-        Returns ``desired`` untouched when nothing holds it — the common case,
-        and the one that keeps a caller's own id meaningful. When it is already
-        in use the id is suffixed rather than rejected, because a second join of
-        the same meeting is a real scenario and failing it is worse than
-        renaming it.
-
-        The returned id is reserved until :meth:`add` registers it or
-        :meth:`release_meeting_id` gives it back, so concurrent joins cannot be
-        handed the same key.
-        """
+    async def reserve_session_id(self, desired: str) -> str:
+        """Reserve an exact session id or reject a duplicate."""
         async with self._lock:
-            candidate = desired
-            while self._is_taken(candidate):
-                candidate = f"{desired}-{uuid.uuid4().hex[:8]}"
-            self._reserved.add(candidate)
-            return candidate
+            if self._is_taken(desired):
+                raise MeetingAlreadyActiveError(desired)
+            self._reserved.add(desired)
+            return desired
 
-    async def release_meeting_id(self, meeting_id: str) -> None:
+    async def release_session_id(self, session_id: str) -> None:
         """Give back a reservation that will never be registered.
 
         Only needed on the failure path between reserving and adding; a
         successful :meth:`add` consumes the reservation itself.
         """
         async with self._lock:
-            self._reserved.discard(meeting_id)
+            self._reserved.discard(session_id)
 
     async def add(self, session: MeetingSession) -> None:
         """Register a session.
@@ -110,39 +95,38 @@ class SessionRegistry:
                 the process is at capacity.
         """
         async with self._lock:
-            meeting_id = session.meeting_id
-            if meeting_id in self._sessions:
-                raise MeetingAlreadyActiveError(meeting_id)
+            session_id = session.session_id
+            if session_id in self._sessions:
+                raise MeetingAlreadyActiveError(session_id)
             if self.is_full:
                 raise MeetingAlreadyActiveError(
-                    f"session limit reached ({self._max_sessions}); cannot start {meeting_id}"
+                    f"session limit reached ({self._max_sessions}); cannot start {session_id}"
                 )
 
-            self._reserved.discard(meeting_id)
-            self._sessions[meeting_id] = session
+            self._reserved.discard(session_id)
+            self._sessions[session_id] = session
             logger.info(
                 "Session registered",
                 extra={
-                    "meeting_id": meeting_id,
                     "session_id": session.session_id,
                     "active_sessions": len(self._sessions),
                 },
             )
 
-    async def remove(self, meeting_id: str) -> MeetingSession | None:
+    async def remove(self, session_id: str) -> MeetingSession | None:
         """Deregister a session. Returns it, or ``None`` if it was not registered."""
         async with self._lock:
-            session = self._sessions.pop(meeting_id, None)
+            session = self._sessions.pop(session_id, None)
             if session is not None:
                 logger.info(
                     "Session deregistered",
-                    extra={"meeting_id": meeting_id, "active_sessions": len(self._sessions)},
+                    extra={"session_id": session_id, "active_sessions": len(self._sessions)},
                 )
             return session
 
-    def get(self, meeting_id: str) -> MeetingSession | None:
+    def get(self, session_id: str) -> MeetingSession | None:
         """Look up a session, or ``None``."""
-        return self._sessions.get(meeting_id)
+        return self._sessions.get(session_id)
 
     def require(self, meeting_id: str) -> MeetingSession:
         """Look up a session.

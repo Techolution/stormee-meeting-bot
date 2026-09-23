@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime
 
 from app.core.context import get_request_id, get_session_id
+from app.core.time import INDIA_TIMEZONE
 
 _TEXT_FORMAT = "%(asctime)s %(levelname)-8s %(name)s [req=%(request_id)s session=%(session_id)s] %(message)s"
 
@@ -24,9 +26,17 @@ class _ContextFilter(logging.Filter):
         return True
 
 
+class _IndiaFormatter(logging.Formatter):
+    """Format logs in IST regardless of the host/container timezone."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:  # noqa: N802
+        value = datetime.fromtimestamp(record.created, INDIA_TIMEZONE)
+        return value.strftime(datefmt) if datefmt else value.isoformat(timespec="milliseconds")
+
+
 def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(_TEXT_FORMAT))
+    handler.setFormatter(_IndiaFormatter(_TEXT_FORMAT))
     handler.addFilter(_ContextFilter())
 
     root = logging.getLogger()

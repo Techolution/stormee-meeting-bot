@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from app.core.config import ProjectSettings
+from app.core.time import INDIA_TIMEZONE
 from app.recording.models import RecordingContext
 
 
@@ -20,6 +21,7 @@ class MeetingRequest:
     this set?" or reach for configuration again.
     """
 
+    session_id: str
     meeting_id: str
     meeting_url: str
     user_name: str
@@ -35,7 +37,7 @@ class MeetingRequest:
         *,
         meeting_url: str,
         defaults: ProjectSettings,
-        meeting_id: str | None = None,
+        session_id: str | None = None,
         user_name: str | None = None,
         user_email: str | None = None,
         project_id: str | None = None,
@@ -48,25 +50,38 @@ class MeetingRequest:
         ``getattr(self, 'user_name', fallback)`` out of the code that uses them.
 
         Args:
-            meeting_id: The caller's own key for this session. Omit it to have
+            session_id: The caller's own key for this session. Omit it to have
                 one minted from the meeting code — the right choice unless the
                 caller already has an id of its own to correlate against, since
                 it cannot collide with a session already in flight.
         """
+        meeting_code = meeting_code_from_url(meeting_url)
+        resolved_session_id = session_id or new_session_id(meeting_code)
         return cls(
-            meeting_id=meeting_id or new_meeting_id(meeting_code_from_url(meeting_url)),
+            # Internally this field is the attendance key used by the session
+            # registry. Publicly it is returned as sessionId.
+            session_id=resolved_session_id,
+            # This legacy internal correlation keeps pre-recording lifecycle
+            # state addressable; no public meetingId exists until recording.
+            meeting_id=resolved_session_id,
             meeting_url=meeting_url,
             user_name=user_name or defaults.default_user_name,
             user_email=user_email or defaults.default_user_email,
             project_id=project_id or defaults.default_project_id,
             project_name=project_name or defaults.default_project_name,
-            meeting_title=meeting_title or f"Meeting {datetime.now(timezone.utc):%Y-%m-%d}",
+            meeting_title=meeting_title or f"Meeting {datetime.now(INDIA_TIMEZONE):%Y-%m-%d}",
         )
 
-    def to_recording_context(self, *, mode_ids: list[str] | None = None) -> RecordingContext:
+    def to_recording_context(
+        self,
+        *,
+        meeting_id: str | None = None,
+        mode_ids: list[str] | None = None,
+    ) -> RecordingContext:
         """Attribution the recording pipeline needs to register its upload."""
         return RecordingContext(
-            meeting_id=self.meeting_id,
+            meeting_id=meeting_id or self.meeting_id,
+            session_id=self.session_id,
             project_id=self.project_id,
             project_name=self.project_name,
             meeting_title=self.meeting_title,
@@ -87,20 +102,19 @@ def meeting_code_from_url(meeting_url: str) -> str:
     return path.rsplit("/", 1)[-1] if path else "meeting"
 
 
+def new_session_id(base: str) -> str:
+    """Identifier for one continuous attendance of a meeting."""
+    return f"{base or 'meeting'}_{uuid.uuid4().hex}"
+
+
 def new_meeting_id(base: str) -> str:
-    """A session key that will not collide with a meeting already in flight.
+    """Identifier for a meeting, with an IST datetime suffix."""
+    # Microseconds keep back-to-back recordings unique while retaining a
+    # readable, chronologically sortable local date/time.
+    ts = datetime.now(INDIA_TIMEZONE).strftime("%Y%m%dT%H%M%S%fIST")
+    return f"{base or 'meeting'}_{ts}"
 
-    The same meeting recorded twice needs two keys: the registry addresses
-    sessions by this id, and so does every call that follows the join.
-    """
-    return f"{base or 'meeting'}-{uuid.uuid4().hex[:8]}"
 
-
-def new_session_id() -> str:
-    """Identifier for one attendance of one meeting.
-
-    Distinct from ``meeting_id``: the same meeting rejoined after a failure is
-    a new session, and correlating logs across a retry requires telling them
-    apart.
-    """
-    return uuid.uuid4().hex[:16]
+def new_recording_meeting_id(base: str) -> str:
+    """Identifier for one recording: ``<meeting-code>_<IST date/time>``."""
+    return new_meeting_id(base)

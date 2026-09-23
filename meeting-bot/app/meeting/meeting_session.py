@@ -43,7 +43,7 @@ from app.core.exceptions import (
 from app.core.request_context import bind
 from app.meeting.chat_monitor import ChatMonitor
 from app.meeting.lifecycle import LifecycleRunner, LifecycleStep
-from app.meeting.models import MeetingRequest, new_session_id
+from app.meeting.models import MeetingRequest
 from app.meeting.participant_monitor import ParticipantMonitor
 from app.meeting.session_dependencies import SessionDependencies
 from app.meeting_platform.base import MeetingPlatform
@@ -87,13 +87,14 @@ class MeetingSession:
         self._deps = dependencies
         self._settings = dependencies.settings
 
-        self._session_id = new_session_id()
+        self._session_id = request.session_id
         self._state = RuntimeState(meeting_id=request.meeting_id, session_id=self._session_id)
         self._lifecycle = LifecycleRunner(meeting_id=request.meeting_id)
 
         self._browser: Browser | None = None
         self._platform: MeetingPlatform | None = None
         self._recorder: Recorder | None = None
+        self._recording_count = 0
         self._transcription: TranscriptionProvider | None = None
         self._chat: ChatMonitor | None = None
         self._participants: ParticipantMonitor | None = None
@@ -137,6 +138,10 @@ class MeetingSession:
     @property
     def recorder(self) -> Recorder | None:
         return self._recorder
+
+    @property
+    def recording_count(self) -> int:
+        return self._recording_count
 
     @property
     def platform(self) -> MeetingPlatform | None:
@@ -311,10 +316,11 @@ class MeetingSession:
 
     async def start_recording(
         self,
+        recording_meeting_id: str | None = None,
         max_duration_seconds: int | None = None,
         generate_incremental_highlights: bool = False,
         mode_ids: list[str] | None = None,
-    ) -> None:
+    ) -> str:
         """Begin recording meeting audio.
 
         Args:
@@ -336,10 +342,12 @@ class MeetingSession:
 
             self._state.recording.set(ComponentState.STARTING)
             self._recorder = self._build_recorder(
+                recording_meeting_id=recording_meeting_id or self.meeting_id,
                 max_duration_seconds=max_duration_seconds,
                 generate_incremental_highlights=generate_incremental_highlights,
                 mode_ids=mode_ids,
             )
+            recording_id = self._recorder.context.meeting_id
 
             try:
                 await self._recorder.start()
@@ -348,15 +356,18 @@ class MeetingSession:
                 raise
 
             self._state.recording.set(ComponentState.ACTIVE, transport=self._recorder.transport)
+            self._recording_count += 1
             # Start MH services in the background (fire-and-forget)
             self._deps.cw_client.startup_mh_services()
             await self._record_event(
                 MeetingLifecycleEvent.RECORDING_STARTED,
                 {"transport": self._recorder.transport},
             )
+            return recording_id
 
     def _build_recorder(
         self,
+        recording_meeting_id: str | None = None,
         max_duration_seconds: int | None = None,
         generate_incremental_highlights: bool = False,
         mode_ids: list[str] | None = None,
@@ -375,7 +386,9 @@ class MeetingSession:
         return Recorder(
             platform=self._platform,
             uploader=uploader,
-            context=self._request.to_recording_context(mode_ids=mode_ids),
+            context=self._request.to_recording_context(
+                meeting_id=recording_meeting_id, mode_ids=mode_ids
+            ),
             finalizer=UploadFinalizer(
                 cw_client=self._deps.cw_client,
                 mail_client=self._deps.mail_client,
@@ -448,7 +461,7 @@ class MeetingSession:
         assert self._recorder is not None
         await self._audio_service.notify_recording_ended(
             RecordingEndedEvent(
-                meeting_id=self.meeting_id,
+                meeting_id=self._recorder.context.meeting_id,
                 project_id=self._request.project_id,
                 queued_chunks=pending_chunks,
                 total_chunks=self._recorder.stats.chunks_captured,
@@ -531,7 +544,14 @@ class MeetingSession:
     async def _handle_transcript_segment(self, segment: TranscriptSegment) -> None:
         """Store a segment and stream it onward."""
         await self._context.append(segment.as_context_item())
-        await self._audio_service.send_transcript_segment(segment.as_wire_payload(self.meeting_id))
+        recording_meeting_id = (
+            self._recorder.context.meeting_id
+            if self._recorder is not None and self._recorder.is_active
+            else self.meeting_id
+        )
+        await self._audio_service.send_transcript_segment(
+            segment.as_wire_payload(recording_meeting_id)
+        )
 
     # ------------------------------------------------------------------
     # Chat and audio playback

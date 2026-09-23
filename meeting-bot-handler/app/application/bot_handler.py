@@ -84,6 +84,11 @@ class BotHandler:
             timeout=self._settings.bot_request_timeout_seconds,
         )
 
+    @staticmethod
+    def _worker_session_id(session: BotSession) -> str:
+        """Use the worker-confirmed key, falling back for records created before it existed."""
+        return session.bot_session_id or session.session_id
+
     async def _client_for_session(self, session: BotSession) -> BotClient:
         target = await self.bot_resolver.resolve(session)
         return self._client_for(target)
@@ -112,6 +117,9 @@ class BotHandler:
 
             targets = await self._dispatch_targets(session)
             accepted, response = await self._join_first_available(session, targets)
+            # Persist what the worker accepted so every later pod call reaches
+            # the same in-memory session even during a rolling deployment.
+            session.bot_session_id = response.get("sessionId") or response.get("session_id")
 
             await self._session_service.assign_bot(
                 session,
@@ -155,7 +163,7 @@ class BotHandler:
             client = self._client_for(target)
             try:
                 response = await client.join_meeting(
-                    meeting_id=session.meeting_id,
+                    session_id=session.session_id,
                     meeting_url=session.meeting_url,
                     user_name=session.user_name,
                     user_email=session.user_email,
@@ -184,7 +192,7 @@ class BotHandler:
 
             logger.info(
                 "Meeting %s accepted by pod %s",
-                session.meeting_id,
+                session.session_id,
                 target.pod_name or target.service_url,
             )
             return target, response
@@ -222,7 +230,7 @@ class BotHandler:
                 return  # Left, failed, or deleted while we waited.
 
             try:
-                status = await client.get_meeting_status(session.meeting_id)
+                status = await client.get_meeting_status(self._worker_session_id(session))
             except BotOperationError as exc:
                 if exc.code == "meeting_not_found":
                     await self._session_service.mark_failed(
@@ -254,7 +262,9 @@ class BotHandler:
             )
 
     # --- Recording ------------------------------------------------------------
-    async def start_recording(self, session_id: str) -> Dict[str, Any]:
+    async def start_recording(
+        self, session_id: str, meeting_id: str | None = None
+    ) -> Dict[str, Any]:
         async with self._locks.acquire(session_id):
             session = await self._session_service.require_session(session_id)
             set_session_id(session_id)
@@ -266,16 +276,24 @@ class BotHandler:
                 )
 
             client = await self._client_for_session(session)
-            response = await client.start_recording(session.meeting_id)
-
-            recording = await self._session_service.create_recording(
-                session, RecordingStatus.RECORDING
+            response = await client.start_recording(
+                self._worker_session_id(session), meeting_id
             )
+            # The worker response is authoritative for recording attribution.
+            meeting_id = response["meetingId"]
+            session.meeting_id = meeting_id
+            recording = await self._session_service.create_recording(
+                session, RecordingStatus.RECORDING, meeting_id=meeting_id
+            )
+            recording_count = len(session.recordings) + 1
+
             await self._session_service.set_recording_status(session, RecordingStatus.RECORDING)
 
             return {
                 "session_id": session_id,
                 "recording_id": recording.recording_id,
+                "meeting_id": recording.meeting_id,
+                "recording_count": recording_count,
                 "recording_status": RecordingStatus.RECORDING.value,
                 "detail": response,
             }
@@ -294,7 +312,13 @@ class BotHandler:
                 }
 
             client = await self._client_for_session(session)
-            response = await client.stop_recording(session.meeting_id)
+            active = await self._session_service.get_active_recording(session.session_id)
+            if active is None:
+                raise InvalidSessionStateError(
+                    f"Session {session_id} has no active recording record",
+                    details={"session_id": session_id},
+                )
+            response = await client.stop_recording(active.meeting_id)
 
             await self._finalize_recording(session, client)
             await self._session_service.set_recording_status(session, RecordingStatus.STOPPED)
@@ -314,7 +338,7 @@ class BotHandler:
         active.status = RecordingStatus.STOPPED
         active.stopped_at = datetime.now(timezone.utc)
         try:
-            stats = await client.get_recording_status(session.meeting_id)
+            stats = await client.get_recording_status(active.meeting_id)
         except (BotOperationError, BotServiceUnavailableError) as exc:
             logger.warning("Could not read final recording stats: %s", exc)
         else:
@@ -328,7 +352,13 @@ class BotHandler:
     async def get_recording_status(self, session_id: str) -> Dict[str, Any]:
         session = await self._session_service.require_session(session_id)
         client = await self._client_for_session(session)
-        return await client.get_recording_status(session.meeting_id)
+        active = await self._session_service.get_active_recording(session_id)
+        if active is None:
+            raise InvalidSessionStateError(
+                f"Session {session_id} has no active recording",
+                details={"session_id": session_id},
+            )
+        return await client.get_recording_status(active.meeting_id)
 
     # --- Transcription and chat ------------------------------------------------
     async def start_transcription(self, session_id: str) -> Dict[str, Any]:
@@ -343,7 +373,7 @@ class BotHandler:
                 )
 
             client = await self._client_for_session(session)
-            response = await client.start_transcription(session.meeting_id)
+            response = await client.start_transcription(self._worker_session_id(session))
             await self._session_service.set_transcription_status(
                 session, TranscriptionStatus.RUNNING
             )
@@ -366,7 +396,7 @@ class BotHandler:
                 }
 
             client = await self._client_for_session(session)
-            response = await client.stop_transcription(session.meeting_id)
+            response = await client.stop_transcription(self._worker_session_id(session))
             await self._session_service.set_transcription_status(
                 session, TranscriptionStatus.COMPLETED
             )
@@ -379,28 +409,28 @@ class BotHandler:
     async def get_transcript(self, session_id: str) -> Dict[str, Any]:
         session = await self._session_service.require_session(session_id)
         client = await self._client_for_session(session)
-        return await client.get_transcript(session.meeting_id)
+        return await client.get_transcript(self._worker_session_id(session))
 
     async def get_chat(self, session_id: str) -> Dict[str, Any]:
         session = await self._session_service.require_session(session_id)
         client = await self._client_for_session(session)
-        return await client.get_chat(session.meeting_id)
+        return await client.get_chat(self._worker_session_id(session))
 
     # --- Audio ------------------------------------------------------------------
     async def play_audio(self, session_id: str, audio_url: str, volume: float = 0.7) -> Dict[str, Any]:
         session = await self._session_service.require_session(session_id)
         client = await self._client_for_session(session)
-        return await client.play_audio(session.meeting_id, audio_url, volume)
+        return await client.play_audio(self._worker_session_id(session), audio_url, volume)
 
     async def mute(self, session_id: str) -> Dict[str, Any]:
         session = await self._session_service.require_session(session_id)
         client = await self._client_for_session(session)
-        return await client.mute(session.meeting_id)
+        return await client.mute(self._worker_session_id(session))
 
     async def unmute(self, session_id: str) -> Dict[str, Any]:
         session = await self._session_service.require_session(session_id)
         client = await self._client_for_session(session)
-        return await client.unmute(session.meeting_id)
+        return await client.unmute(self._worker_session_id(session))
 
     # --- Teardown -----------------------------------------------------------------
     async def leave(self, session_id: str) -> Dict[str, Any]:
@@ -429,13 +459,16 @@ class BotHandler:
             await self._session_service.mark_leaving(session)
 
             try:
-                response = await client.leave_meeting(session.meeting_id)
+                response = await client.leave_meeting(self._worker_session_id(session))
             except BotOperationError as exc:
                 if exc.code != "meeting_not_found":
                     await self._session_service.mark_failed(session, exc.message)
                     raise
                 # The pod has already dropped the meeting; the intent still holds.
                 response = {"message": "Meeting was no longer active on the pod"}
+
+            if session.active_recording_status == RecordingStatus.RECORDING:
+                await self._finalize_recording(session, client)
 
             await self._session_service.mark_completed(session)
             self._locks.release_key(session_id)
@@ -465,7 +498,7 @@ class BotHandler:
         if include_runtime and session.is_dispatched and not session.is_terminal:
             try:
                 client = await self._client_for_session(session)
-                runtime = await client.get_meeting_status(session.meeting_id)
+                runtime = await client.get_meeting_status(self._worker_session_id(session))
             except (BotOperationError, BotServiceUnavailableError) as exc:
                 logger.warning("Could not read runtime status from the pod: %s", exc)
                 runtime_error = str(exc)

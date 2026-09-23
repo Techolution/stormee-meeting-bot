@@ -24,6 +24,7 @@ pytestmark = pytest.mark.asyncio
 def context() -> RecordingContext:
     return RecordingContext(
         meeting_id="meeting-1",
+        session_id="session-1",
         project_id="project-test",
         meeting_title="Weekly Sync",
         user_name="Test User",

@@ -16,8 +16,13 @@ from pydantic import BaseModel, Field, field_validator
 class CreateSessionRequest(BaseModel):
     """Register a meeting. No pod is claimed until the session is started."""
 
-    meeting_id: str = Field(..., min_length=1, description="Caller-assigned meeting identifier")
     meeting_url: str = Field(..., description="Absolute meeting URL")
+    session_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description="Optional caller-assigned session identifier",
+        examples=["abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09"],
+    )
     scheduled_at: Optional[datetime] = None
 
     # Pins the session to a specific bot pod, bypassing discovery. For local
@@ -43,10 +48,16 @@ class CreateSessionRequest(BaseModel):
 
 
 class SessionResponse(BaseModel):
-    """The durable session record. Pod assignment is deliberately not exposed."""
+    """The handler's session record. Pod assignment is deliberately not exposed."""
 
-    session_id: str
-    meeting_id: str
+    session_id: str = Field(
+        examples=["abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09"]
+    )
+    meeting_id: Optional[str] = Field(
+        default=None,
+        examples=["abc-defg-hij_20260917T143045IST"],
+        description="Latest recording meeting identifier; null before recording starts",
+    )
     meeting_url: str
     meeting_status: str
     bot_status: str
@@ -68,7 +79,19 @@ class SessionActionResponse(BaseModel):
     recording_status: Optional[str] = None
     transcription_status: Optional[str] = None
     recording_id: Optional[str] = None
+    meeting_id: Optional[str] = None
+    recording_count: Optional[int] = None
     detail: Optional[Dict[str, Any]] = None
+
+
+class StartRecordingRequest(BaseModel):
+    """Optional caller-controlled recording identity; session_id is in the path."""
+
+    meeting_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        examples=["abc-defg-hij_20260917T143045IST"],
+    )
 
 
 class PlayAudioRequest(BaseModel):

@@ -11,7 +11,7 @@ class SessionStatusResponse(BaseModel):
     """Durable state first, live pod state as enrichment."""
 
     session_id: str
-    meeting_id: str
+    meeting_id: Optional[str] = None
     meeting_status: str
     bot_status: str
     recording_status: str

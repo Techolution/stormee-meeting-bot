@@ -43,7 +43,7 @@ class BotClient:
     # --- Meeting lifecycle ---------------------------------------------------
     async def join_meeting(
         self,
-        meeting_id: str,
+        session_id: str,
         meeting_url: str,
         user_name: Optional[str] = None,
         user_email: Optional[str] = None,
@@ -52,7 +52,7 @@ class BotClient:
         meeting_title: Optional[str] = None,
     ) -> Dict[str, Any]:
         return await self.api_client.join_meeting(
-            meeting_id=meeting_id,
+            session_id=session_id,
             meeting_url=meeting_url,
             user_name=user_name,
             user_email=user_email,
@@ -75,8 +75,10 @@ class BotClient:
         return await self.api_client.unmute(meeting_id)
 
     # --- Recording -----------------------------------------------------------
-    async def start_recording(self, meeting_id: str) -> Dict[str, Any]:
-        return await self.api_client.start_recording(meeting_id)
+    async def start_recording(
+        self, session_id: str, meeting_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return await self.api_client.start_recording(session_id, meeting_id)
 
     async def stop_recording(self, meeting_id: str) -> Dict[str, Any]:
         return await self.api_client.stop_recording(meeting_id)

@@ -96,7 +96,9 @@ class BotServiceResolver:
         """Find the pod hosting this session's meeting, if any still is."""
         if self._pod_pool is None or not self._pod_pool.available:
             return None
-        pod = await self._pod_pool.find_pod_hosting(session.meeting_id)
+        pod = await self._pod_pool.find_pod_hosting(
+            session.bot_session_id or session.session_id
+        )
         return BotTarget.from_pod(pod) if pod else None
 
     async def allocate(self, session: BotSession) -> List[BotTarget]:

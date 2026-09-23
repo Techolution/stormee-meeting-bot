@@ -49,7 +49,7 @@ def session_parts(settings: Settings, monkeypatch: pytest.MonkeyPatch):
     )
 
     request = MeetingRequest.build(
-        meeting_id="meeting-1",
+        session_id="meeting-1",
         meeting_url="https://meet.google.com/abc-defg-hij",
         defaults=settings.project,
         user_name="Alice",
@@ -150,6 +150,7 @@ async def test_recording_flows_from_page_chunk_to_stored_object(session_parts) -
     await session.start()
 
     await session.start_recording()
+    assert session.recording_count == 1
     assert session.recorder is not None
     assert session.recorder.status is RecordingStatus.RECORDING
     assert platform.recording is True
@@ -177,6 +178,20 @@ async def test_recording_flows_from_page_chunk_to_stored_object(session_parts) -
     # A completed upload is registered and follow-up work is requested.
     assert len(cw.confirmed) == 1
     assert len(cw.artifacts) == 1
+
+    await session.stop()
+
+
+async def test_recording_count_is_a_session_scoped_visual_tally(session_parts) -> None:
+    session, _platform, _cw, _storage, _repository = session_parts
+    await session.start()
+
+    first_meeting_id = await session.start_recording()
+    await session.stop_recording()
+    second_meeting_id = await session.start_recording()
+
+    assert first_meeting_id == second_meeting_id == session.meeting_id
+    assert session.recording_count == 2
 
     await session.stop()
 
@@ -376,7 +391,7 @@ def streaming_session_parts(settings: Settings, monkeypatch: pytest.MonkeyPatch)
         storage_client=FakeStorage(),  # type: ignore[arg-type]
     )
     request = MeetingRequest.build(
-        meeting_id="meeting-ws",
+        session_id="meeting-ws",
         meeting_url="https://meet.google.com/abc-defg-hij",
         defaults=streaming_settings.project,
         project_id="project-test",

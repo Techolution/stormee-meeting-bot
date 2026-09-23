@@ -68,6 +68,9 @@ def create_container(
             settings.bot_service_url or "<unset>",
         )
 
+    # Current deployment limitation: this routing state is process-local.
+    # Replace the default with a shared SessionRepository before scaling the
+    # handler beyond one replica or requiring restart recovery.
     repository = repository or InMemorySessionRepository()
     session_service = SessionService(repository)
     resolver = BotServiceResolver(

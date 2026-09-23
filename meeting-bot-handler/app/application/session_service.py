@@ -1,4 +1,4 @@
-"""Session lifecycle: the durable business state of a meeting.
+"""Session lifecycle: the handler's control-plane state for a meeting.
 
 Every state transition a session can make lives here, so the orchestrator reads
 as a sequence of intents rather than a sequence of field assignments. This layer
@@ -11,7 +11,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from app.domain.enums import BotStatus, MeetingStatus, RecordingStatus, TranscriptionStatus
+from app.domain.enums import (
+    BotStatus,
+    MeetingStatus,
+    RecordingStatus,
+    TranscriptionStatus,
+)
 from app.domain.exceptions import SessionAlreadyExistsError, SessionNotFoundError
 from app.domain.models import BotSession, MeetingEvent, MeetingRecording
 from app.repositories.session_repository import SessionRepository
@@ -39,7 +44,7 @@ class SessionService:
         session.created_at = session.created_at or _now()
         session.updated_at = session.created_at
         created = await self._repo.create(session)
-        await self.record_event(created, "session.created", {"meeting_id": created.meeting_id})
+        await self.record_event(created, "session.created", {})
         return created
 
     async def get_session(self, session_id: str) -> Optional[BotSession]:
@@ -133,11 +138,15 @@ class SessionService:
         return await self.update_session(session)
 
     # --- Recording ------------------------------------------------------------
-    async def create_recording(self, session: BotSession, status: RecordingStatus) -> MeetingRecording:
+    async def create_recording(
+        self, session: BotSession, status: RecordingStatus, meeting_id: Optional[str] = None
+    ) -> MeetingRecording:
+        # Keep the worker-confirmed meetingId on the take; the sessionId remains
+        # the stable key used to address the bot attendance.
         recording = MeetingRecording(
             recording_id=uuid.uuid4().hex,
             session_id=session.session_id,
-            meeting_id=session.meeting_id,
+            meeting_id=meeting_id or uuid.uuid4().hex,
             status=status,
             started_at=_now(),
             created_at=_now(),

@@ -6,6 +6,7 @@ the bot pod is an httpx MockTransport implementing the documented contract.
 
 from __future__ import annotations
 
+import json
 from typing import Callable, Dict, Optional
 
 import httpx
@@ -67,13 +68,15 @@ class FakeBot:
     """
 
     def __init__(self, *, busy: bool = False, offline: bool = False, claimed_after_probe: bool = False):
-        self.meeting_id: Optional[str] = "someone-elses-meeting" if busy else None
+        self.meeting_id: Optional[str] = None
+        self.session_id: Optional[str] = "someone-elses-session" if busy else None
         self.offline = offline
         #: Probes free, then refuses the join — a pod claimed by another
         #: replica between the two calls.
         self.claimed_after_probe = claimed_after_probe
         self.session_state = "joining"
         self.recording = False
+        self.recording_meeting_id: Optional[str] = None
         self.calls: list[tuple[str, str]] = []
         self.request_ids: list[str] = []
 
@@ -89,33 +92,32 @@ class FakeBot:
         self.request_ids.append(request.headers.get("X-Request-ID", ""))
 
         if path == "/ready":
-            free = self.meeting_id is None
+            free = self.session_id is None
             return httpx.Response(200 if free else 503, json={"ready": free, "dependencies": []})
 
         if path == "/meetings/join":
             if self.claimed_after_probe:
                 return self._error(409, "meeting_already_active", "Claimed since the probe")
-            if self.meeting_id is not None:
+            if self.session_id is not None:
                 return self._error(409, "meeting_already_active", "Already in a meeting")
-            self.meeting_id = request.read().decode() and _json(request)["meetingId"]
+            payload = json.loads(request.content)
+            self.session_id = payload["sessionId"]
             return httpx.Response(
                 202,
                 json={
                     "message": "Joining meeting",
-                    "meetingId": self.meeting_id,
-                    "sessionId": "bot-session-1",
+                    "sessionId": self.session_id,
                 },
             )
 
         if path.startswith("/meetings/") and path.endswith("/status"):
             meeting_id = path.split("/")[2]
-            if meeting_id != self.meeting_id:
+            if meeting_id != self.session_id:
                 return self._error(404, "meeting_not_found", "No such meeting")
             return httpx.Response(
                 200,
                 json={
-                    "meeting_id": meeting_id,
-                    "session_id": "bot-session-1",
+                    "session_id": self.session_id,
                     "session_state": self.session_state,
                     "healthy": True,
                     "components": [],
@@ -124,6 +126,7 @@ class FakeBot:
 
         if path == "/meetings/leave":
             self.meeting_id = None
+            self.session_id = None
             self.session_state = "ended"
             return httpx.Response(200, json={"message": "Left meeting"})
 
@@ -131,9 +134,32 @@ class FakeBot:
             if self.recording:
                 return self._error(409, "recording_already_active", "Already recording")
             self.recording = True
-            return httpx.Response(200, json={"message": "Recording started"})
+            payload = json.loads(request.content)
+            if payload.get("sessionId") != self.session_id:
+                return self._error(404, "meeting_not_found", "No such meeting")
+            recording_number = len(
+                [call for call in self.calls if call == ("POST", "/recordings/start")]
+            )
+            self.recording_meeting_id = payload.get("meetingId") or (
+                f"abc-defg-hij_20260917T143045{recording_number:06d}IST"
+            )
+            self.meeting_id = self.recording_meeting_id
+            return httpx.Response(
+                200,
+                json={
+                    "message": "Recording started",
+                    "meetingId": self.recording_meeting_id,
+                    "sessionId": self.session_id,
+                    "recordingCount": len(
+                        [call for call in self.calls if call == ("POST", "/recordings/start")]
+                    ),
+                },
+            )
 
         if path == "/recordings/stop":
+            requested = _json(request).get("meetingId")
+            if requested != self.recording_meeting_id:
+                return self._error(404, "meeting_not_found", "No such recording")
             self.recording = False
             return httpx.Response(200, json={"message": "Recording stopped"})
 

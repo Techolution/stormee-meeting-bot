@@ -243,6 +243,9 @@ class FakeCWClient:
         self.upload_targets = 0
         self.fail_target = False
 
+    def startup_mh_services(self) -> None:
+        """Match the production fire-and-forget hook used after recording starts."""
+
     async def create_resumable_upload(
         self, *, project_id: str, filename: str, content_type: str
     ) -> ResumableUploadTarget:

@@ -14,21 +14,30 @@ operation is complete when the response is written.
 from __future__ import annotations
 
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Query, status
 
 from app.api.dependencies import BotHandlerDep, SessionServiceDep
+from app.core.time import in_india
 from app.domain.models import BotSession
 from app.schemas.bot import (
     CreateSessionRequest,
     PlayAudioRequest,
     SessionActionResponse,
     SessionResponse,
+    StartRecordingRequest,
 )
 from app.schemas.commands import ChatResponse, TranscriptResponse
 from app.schemas.status import SessionStatusResponse
 
 router = APIRouter(prefix="/bot-sessions", tags=["bot-sessions"])
+
+
+def _new_session_id(meeting_url: str) -> str:
+    """Create a collision-resistant attendance key while retaining the Meet code."""
+    code = urlparse(meeting_url.strip()).path.strip("/").rsplit("/", 1)[-1] or "meeting"
+    return f"{code}_{uuid.uuid4().hex}"
 
 
 def _to_response(session: BotSession) -> SessionResponse:
@@ -41,9 +50,9 @@ def _to_response(session: BotSession) -> SessionResponse:
         recording_status=session.active_recording_status.value,
         transcription_status=session.transcription_status.value,
         last_error=session.last_error,
-        created_at=session.created_at,
-        started_at=session.started_at,
-        updated_at=session.updated_at,
+        created_at=in_india(session.created_at) if session.created_at else None,
+        started_at=in_india(session.started_at) if session.started_at else None,
+        updated_at=in_india(session.updated_at) if session.updated_at else None,
     )
 
 
@@ -62,9 +71,10 @@ async def create_session(
 
     No pod is claimed here. Set ``auto_start`` to dispatch immediately.
     """
+    # Join establishes attendance only; meetingId is selected when recording starts.
+    session_id = request.session_id or _new_session_id(request.meeting_url)
     session = BotSession(
-        session_id=uuid.uuid4().hex,
-        meeting_id=request.meeting_id,
+        session_id=session_id,
         meeting_url=request.meeting_url,
         scheduled_at=request.scheduled_at,
         service_url=request.bot_service_url,
@@ -94,7 +104,7 @@ async def list_sessions(
 
 @router.get("/{session_id}", response_model=SessionResponse, summary="Get session record")
 async def get_session(session_id: str, sessions: SessionServiceDep) -> SessionResponse:
-    """The durable record, read from storage without touching the pod."""
+    """Read the handler repository record without touching the worker pod."""
     return _to_response(await sessions.require_session(session_id))
 
 
@@ -126,13 +136,22 @@ async def start_session(session_id: str, handler: BotHandlerDep) -> SessionActio
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start recording",
 )
-async def start_recording(session_id: str, handler: BotHandlerDep) -> SessionActionResponse:
-    result = await handler.start_recording(session_id)
+async def start_recording(
+    session_id: str,
+    handler: BotHandlerDep,
+    request: StartRecordingRequest | None = None,
+) -> SessionActionResponse:
+    result = await handler.start_recording(
+        session_id,
+        meeting_id=request.meeting_id if request else None,
+    )
     return SessionActionResponse(
         message="Recording start accepted",
         session_id=session_id,
         recording_status=result["recording_status"],
         recording_id=result.get("recording_id"),
+        meeting_id=result.get("meeting_id"),
+        recording_count=result.get("recording_count"),
         detail=result.get("detail"),
     )
 

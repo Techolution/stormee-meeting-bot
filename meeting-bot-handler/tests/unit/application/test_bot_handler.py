@@ -129,7 +129,7 @@ class TestJoinWatcher:
         session = await session_service.get_session("sess-1")
         assert session.meeting_status == MeetingStatus.ACTIVE
         assert session.started_at is not None
-        assert session.bot_session_id == "bot-session-1"
+        assert session.bot_session_id == "sess-1"
 
     async def test_a_join_that_never_completes_fails_the_session(
         self, handler, created_session, session_service
@@ -151,6 +151,8 @@ class TestRecording:
 
         started = await handler.start_recording("sess-1")
         assert started["recording_status"] == RecordingStatus.RECORDING.value
+        assert started["session_id"] == "sess-1"
+        assert started["recording_count"] == 1
 
         await handler.stop_recording("sess-1")
 
@@ -169,6 +171,26 @@ class TestRecording:
 
         with pytest.raises(InvalidSessionStateError):
             await handler.start_recording("sess-1")
+
+    async def test_sequential_recordings_get_distinct_generated_meeting_ids(
+        self, handler, created_session, session_service
+    ):
+        await handler.start_bot("sess-1")
+
+        first = await handler.start_recording("sess-1")
+        await handler.stop_recording("sess-1")
+        second = await handler.start_recording("sess-1")
+
+        assert first["session_id"] == second["session_id"] == "sess-1"
+        assert first["meeting_id"] != second["meeting_id"]
+        assert created_session.meeting_id == second["meeting_id"]
+        assert first["recording_count"] == 1
+        assert second["recording_count"] == 2
+        session = await session_service.get_session("sess-1")
+        assert [take.meeting_id for take in session.recordings] == [
+            first["meeting_id"],
+            second["meeting_id"],
+        ]
 
     async def test_stopping_a_recording_that_is_not_running_is_a_no_op(
         self, handler, created_session, fake_bot
@@ -293,7 +315,7 @@ class TestRecovery:
         # The handler restarted and lost the pod assignment; the meeting is
         # still running on a pod that can be found by asking.
         holder = FakeBot()
-        holder.meeting_id = "demo-001"
+        holder.session_id = "sess-1"
         http = httpx.AsyncClient(transport=bot_transport({"10.0.0.2": holder}))
         pool = BotPodPool(
             kubernetes=FakeKubernetesClient([running_pod("bot-b", "10.0.0.2")]),

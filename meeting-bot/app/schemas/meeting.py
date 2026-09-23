@@ -15,22 +15,36 @@ from app.schemas.common import CamelCaseModel
 class JoinMeetingRequest(CamelCaseModel):
     """Ask the bot to join a meeting."""
 
+    # Join establishes attendance identity only; recording identity is chosen
+    # later by POST /recordings/start.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "meetingUrl": "https://meet.google.com/abc-defg-hij",
+                    "sessionId": "abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09",
+                    "userName": "",
+                    "userEmail": "",
+                    "projectId": "",
+                    "projectName": "",
+                    "meetingTitle": "",
+                }
+            ]
+        }
+    )
+
     meeting_url: str = Field(
         ...,
         alias="meetingUrl",
         min_length=1,
         description="Full meeting URL, e.g. https://meet.google.com/abc-defg-hij",
     )
-    meeting_id: str | None = Field(
+    session_id: str | None = Field(
         default=None,
-        alias="meetingId",
-        description=(
-            "Optional caller-assigned identifier. Omit it and one is minted from "
-            "the meeting code. Either way the id in the response — not the one "
-            "sent here — is what all later calls must address the session by: a "
-            "rejoin of a meeting already in progress is given a suffixed id "
-            "rather than being rejected."
-        ),
+        alias="sessionId",
+        min_length=1,
+        description="Optional caller-assigned session identifier.",
+        examples=["abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09"],
     )
     user_name: str | None = Field(default=None, alias="userName")
     user_email: str | None = Field(default=None, alias="userEmail")
@@ -46,30 +60,29 @@ class JoinMeetingRequest(CamelCaseModel):
             raise ValueError("meetingUrl must be an absolute http(s) URL")
         return candidate
 
-    @field_validator("meeting_id", mode="before")
-    @classmethod
-    def _normalise_meeting_id(cls, value: object) -> str | None:
-        """Blank is 'not supplied', not an error — the server mints one instead.
-
-        Coerced with ``str`` because a caller sending a numeric id would
-        otherwise key the session under an int and never match its own string
-        on the calls that follow.
-        """
-        if value is None:
-            return None
-        return str(value).strip() or None
-
-
 class MeetingActionRequest(CamelCaseModel):
     """Address an existing session."""
 
-    meeting_id: str = Field(..., alias="meetingId", min_length=1)
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"sessionId": "abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09"}
+            ]
+        }
+    )
+
+    session_id: str = Field(
+        ...,
+        alias="sessionId",
+        min_length=1,
+        examples=["abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09"],
+    )
 
 
 class PlayAudioRequest(CamelCaseModel):
     """Play audio into the meeting through the bot's virtual microphone."""
 
-    meeting_id: str = Field(..., alias="meetingId", min_length=1)
+    session_id: str = Field(..., alias="sessionId", min_length=1)
     audio_url: str = Field(..., alias="audioUrl", min_length=1, description="Audio stream or data URL.")
     volume: float = Field(default=0.7, ge=0.0, le=1.0)
 
@@ -78,15 +91,18 @@ class JoinMeetingResponse(CamelCaseModel):
     """Accepted a join request. Joining continues in the background."""
 
     message: str
-    meeting_id: str = Field(..., alias="meetingId")
-    session_id: str = Field(..., alias="sessionId")
+    session_id: str = Field(
+        ...,
+        alias="sessionId",
+        examples=["abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09"],
+    )
 
 
 class MeetingActionResponse(CamelCaseModel):
     """Generic acknowledgement for a meeting action."""
 
     message: str
-    meeting_id: str = Field(..., alias="meetingId")
+    session_id: str = Field(..., alias="sessionId")
 
 
 class ParticipantSummary(CamelCaseModel):

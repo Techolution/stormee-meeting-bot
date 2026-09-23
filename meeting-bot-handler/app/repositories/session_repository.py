@@ -7,7 +7,11 @@ from app.domain.models import BotSession, MeetingRecording, MeetingEvent
 
 
 class SessionRepository(ABC):
-    """Abstract interface for durable bot session and recording storage."""
+    """Storage boundary for sessions, recordings, and events.
+
+    Implementations decide durability: the current production wiring uses the
+    process-local in-memory implementation.
+    """
 
     @abstractmethod
     async def create(self, session: BotSession) -> BotSession:

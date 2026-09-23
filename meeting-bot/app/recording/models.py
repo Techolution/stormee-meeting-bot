@@ -141,6 +141,7 @@ class RecordingContext:
     """Attribution carried with a recording, used when registering the upload."""
 
     meeting_id: str
+    session_id: str = ""
     project_id: str | None = None
     project_name: str | None = None
     meeting_title: str | None = None

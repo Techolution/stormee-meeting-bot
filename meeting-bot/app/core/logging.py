@@ -14,9 +14,11 @@ import json
 import logging
 import sys
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from typing import Any
 
 from app.core.request_context import get_context
+from app.core.time import INDIA_TIMEZONE
 
 #: Attributes present on every LogRecord. Anything else was passed as ``extra``
 #: by the call site and is therefore structured data worth emitting.
@@ -124,7 +126,11 @@ class ContextFilter(logging.Filter):
 class TextFormatter(logging.Formatter):
     """Human-readable single line: timestamp, level, logger, message, key=value pairs."""
 
-    default_time_format = "%Y-%m-%d %H:%M:%S"
+    default_time_format = "%Y-%m-%d %H:%M:%S IST"
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:  # noqa: N802
+        value = datetime.fromtimestamp(record.created, INDIA_TIMEZONE)
+        return value.strftime(datefmt or self.default_time_format)
 
     def format(self, record: logging.LogRecord) -> str:
         base = (
@@ -153,6 +159,10 @@ class TextFormatter(logging.Formatter):
 
 class JSONFormatter(logging.Formatter):
     """One JSON object per line, for structured log ingestion."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:  # noqa: N802
+        value = datetime.fromtimestamp(record.created, INDIA_TIMEZONE)
+        return value.strftime(datefmt) if datefmt else value.isoformat()
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {

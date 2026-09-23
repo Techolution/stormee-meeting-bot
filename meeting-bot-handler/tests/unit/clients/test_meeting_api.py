@@ -34,14 +34,14 @@ async def test_join_sends_camel_case_and_drops_unset_fields():
     client, seen = client_recording_requests()
 
     await client.join_meeting(
-        meeting_id="demo-001",
+        session_id="demo-001",
         meeting_url="https://meet.google.com/abc",
         user_name="Alice",
     )
 
     body = json.loads(seen[0].content)
     assert body == {
-        "meetingId": "demo-001",
+        "sessionId": "demo-001",
         "meetingUrl": "https://meet.google.com/abc",
         "userName": "Alice",
     }
@@ -52,16 +52,27 @@ async def test_inbound_request_id_is_forwarded_to_the_bot():
     client, seen = client_recording_requests()
     set_request_id("trace-me-123")
 
-    await client.start_recording("demo-001")
+    await client.start_recording("meeting-1")
 
     assert seen[0].headers["X-Request-ID"] == "trace-me-123"
+
+
+async def test_recording_start_sends_session_and_optional_meeting_id():
+    client, seen = client_recording_requests()
+
+    await client.start_recording("session-1", "meeting-1")
+
+    assert json.loads(seen[0].content) == {
+        "sessionId": "session-1",
+        "meetingId": "meeting-1",
+    }
 
 
 async def test_a_request_id_is_generated_when_there_is_none():
     client, seen = client_recording_requests()
     set_request_id("")
 
-    await client.start_recording("demo-001")
+    await client.start_recording("meeting-1")
 
     assert seen[0].headers["X-Request-ID"]
 

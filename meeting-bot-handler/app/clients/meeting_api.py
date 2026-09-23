@@ -147,7 +147,7 @@ class MeetingApiClient:
     # --- Meeting lifecycle ---------------------------------------------------
     async def join_meeting(
         self,
-        meeting_id: str,
+        session_id: str,
         meeting_url: str,
         user_name: Optional[str] = None,
         user_email: Optional[str] = None,
@@ -155,8 +155,9 @@ class MeetingApiClient:
         project_name: Optional[str] = None,
         meeting_title: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # Join establishes the attendance identity only.
         payload = {
-            "meetingId": meeting_id,
+            "sessionId": session_id,
             "meetingUrl": meeting_url,
             "userName": user_name,
             "userEmail": user_email,
@@ -168,28 +169,34 @@ class MeetingApiClient:
         payload = {k: v for k, v in payload.items() if v is not None}
         return await self._request("POST", "/meetings/join", json_data=payload)
 
-    async def leave_meeting(self, meeting_id: str) -> Dict[str, Any]:
-        return await self._request("POST", "/meetings/leave", json_data={"meetingId": meeting_id})
+    async def leave_meeting(self, session_id: str) -> Dict[str, Any]:
+        return await self._request("POST", "/meetings/leave", json_data={"sessionId": session_id})
 
     # --- Audio ---------------------------------------------------------------
     async def play_audio(
-        self, meeting_id: str, audio_url: str, volume: float = 0.7
+        self, session_id: str, audio_url: str, volume: float = 0.7
     ) -> Dict[str, Any]:
         return await self._request(
             "POST",
             "/meetings/audio/play",
-            json_data={"meetingId": meeting_id, "audioUrl": audio_url, "volume": volume},
+            json_data={"sessionId": session_id, "audioUrl": audio_url, "volume": volume},
         )
 
-    async def mute(self, meeting_id: str) -> Dict[str, Any]:
-        return await self._request("POST", "/meetings/audio/mute", json_data={"meetingId": meeting_id})
+    async def mute(self, session_id: str) -> Dict[str, Any]:
+        return await self._request("POST", "/meetings/audio/mute", json_data={"sessionId": session_id})
 
-    async def unmute(self, meeting_id: str) -> Dict[str, Any]:
-        return await self._request("POST", "/meetings/audio/unmute", json_data={"meetingId": meeting_id})
+    async def unmute(self, session_id: str) -> Dict[str, Any]:
+        return await self._request("POST", "/meetings/audio/unmute", json_data={"sessionId": session_id})
 
     # --- Recording -----------------------------------------------------------
-    async def start_recording(self, meeting_id: str) -> Dict[str, Any]:
-        return await self._request("POST", "/recordings/start", json_data={"meetingId": meeting_id})
+    async def start_recording(
+        self, session_id: str, meeting_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        payload = {"sessionId": session_id, "meetingId": meeting_id}
+        payload = {key: value for key, value in payload.items() if value is not None}
+        return await self._request(
+            "POST", "/recordings/start", json_data=payload
+        )
 
     async def stop_recording(self, meeting_id: str) -> Dict[str, Any]:
         # Returns only once the object is closed, which can outlast a normal
@@ -218,8 +225,8 @@ class MeetingApiClient:
         return await self._request("GET", f"/transcription/{meeting_id}/chat")
 
     # --- Status and health ---------------------------------------------------
-    async def get_bot_status(self, meeting_id: str) -> Dict[str, Any]:
-        return await self._request("GET", f"/meetings/{meeting_id}/status")
+    async def get_bot_status(self, session_id: str) -> Dict[str, Any]:
+        return await self._request("GET", f"/meetings/{session_id}/status")
 
     async def get_service_status(self) -> Dict[str, Any]:
         return await self._request("GET", "/status")

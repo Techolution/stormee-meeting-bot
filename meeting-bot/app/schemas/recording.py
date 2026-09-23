@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from app.schemas.common import CamelCaseModel
 
@@ -15,7 +15,34 @@ class StartRecordingRequest(CamelCaseModel):
     configuration via highlight model types and categorization mode settings.
     """
 
-    meeting_id: str = Field(..., alias="meetingId", min_length=1)
+    # sessionId selects an existing attendance; meetingId is optional because
+    # the worker can mint the recording identity at this boundary.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "sessionId": "abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09",
+                    "meetingId": "abc-defg-hij_20260917T143045IST",
+                    "maxDurationSeconds": 300,
+                    "generateIncrementalHighlights": True,
+                    "modeIds": [],
+                }
+            ]
+        }
+    )
+
+    session_id: str = Field(
+        ...,
+        alias="sessionId",
+        min_length=1,
+        examples=["abc-defg-hij_6e16ac69fc014df2a7711d071a32fe09"],
+    )
+    meeting_id: str | None = Field(
+        default=None,
+        alias="meetingId",
+        min_length=1,
+        examples=["abc-defg-hij_20260917T143045IST"],
+    )
     max_duration_seconds: int | None = Field(
         default=None,
         alias="maxDurationSeconds",
@@ -37,12 +64,37 @@ class StartRecordingRequest(CamelCaseModel):
 class StopRecordingRequest(CamelCaseModel):
     """Stop capturing and finalize the upload."""
 
-    meeting_id: str = Field(..., alias="meetingId", min_length=1)
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"meetingId": "abc-defg-hij_20260917T143045IST"}
+            ]
+        }
+    )
+
+    meeting_id: str = Field(
+        ...,
+        alias="meetingId",
+        min_length=1,
+        examples=["abc-defg-hij_20260917T143045IST"],
+    )
 
 
 class RecordingActionResponse(CamelCaseModel):
     message: str
     meeting_id: str = Field(..., alias="meetingId")
+
+
+class StartRecordingResponse(RecordingActionResponse):
+    """Identity and display metadata for a newly started recording take."""
+
+    session_id: str = Field(..., alias="sessionId")
+    recording_count: int = Field(
+        ...,
+        alias="recordingCount",
+        ge=1,
+        description="Visual count of recordings started under this session; it has no lifecycle effect.",
+    )
 
 
 class RecordingStatusResponse(CamelCaseModel):

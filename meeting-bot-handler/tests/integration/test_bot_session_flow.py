@@ -11,7 +11,6 @@ def test_full_session_lifecycle(client, fake_bot):
     created = client.post(
         "/bot-sessions",
         json={
-            "meeting_id": "demo-001",
             "meeting_url": "https://meet.google.com/abc-defg-hij",
             "user_name": "Alice Smith",
             "meeting_title": "Weekly Sync",
@@ -56,6 +55,20 @@ def test_full_session_lifecycle(client, fake_bot):
     assert final["transcription_status"] == "COMPLETED"
 
 
+def test_create_preserves_caller_supplied_session_id(client):
+    response = client.post(
+        "/bot-sessions",
+        json={
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "session_id": "caller-session",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["session_id"] == "caller-session"
+    assert response.json()["meeting_id"] is None
+
+
 def test_leave_finalizes_a_running_recording(client, fake_bot):
     session_id = _start(client)
     client.post(f"/bot-sessions/{session_id}/recording/start")
@@ -64,6 +77,32 @@ def test_leave_finalizes_a_running_recording(client, fake_bot):
 
     final = client.get(f"/bot-sessions/{session_id}").json()
     assert final["recording_status"] == "STOPPED"
+
+
+def test_recording_restart_keeps_session_and_meeting_ids(client, fake_bot):
+    session_id = _start(client)
+
+    first = client.post(f"/bot-sessions/{session_id}/recording/start").json()
+    client.post(f"/bot-sessions/{session_id}/recording/stop")
+    second = client.post(f"/bot-sessions/{session_id}/recording/start").json()
+
+    assert first["session_id"] == second["session_id"] == session_id
+    assert first["meeting_id"] != second["meeting_id"]
+    assert first["recording_count"] == 1
+    assert second["recording_count"] == 2
+
+
+def test_recording_start_preserves_caller_meeting_id(client):
+    session_id = _start(client)
+
+    response = client.post(
+        f"/bot-sessions/{session_id}/recording/start",
+        json={"meeting_id": "caller-meeting"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["session_id"] == session_id
+    assert response.json()["meeting_id"] == "caller-meeting"
 
 
 def test_sessions_can_be_listed_and_filtered(client):
@@ -75,14 +114,14 @@ def test_sessions_can_be_listed_and_filtered(client):
     active = client.get("/bot-sessions", params={"active_only": True}).json()
 
     assert len(everything) == 2
-    assert [s["meeting_id"] for s in active] == ["demo-002"]
+    assert len(active) == 1
+    assert active[0]["session_id"].startswith("abc-defg-hij_")
 
 
 def test_auto_start_dispatches_on_creation(client, fake_bot):
     response = client.post(
         "/bot-sessions",
         json={
-            "meeting_id": "demo-003",
             "meeting_url": "https://meet.google.com/abc-defg-hij",
             "auto_start": True,
         },

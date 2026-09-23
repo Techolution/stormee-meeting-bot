@@ -1,7 +1,10 @@
 # Meeting Bot Handler
 
-Control plane for meeting bots. It owns the durable state of a meeting session,
+Control plane for meeting bots. It tracks the state of a meeting session,
 picks a bot pod in the cluster to run it, and drives that pod's lifecycle.
+
+The default repository is process-local and supports only one handler replica;
+see [Status](#status) before deploying it as a highly available service.
 
 A client only ever holds a `session_id`. Which pod runs the meeting, where it
 is, and whether it is still alive are this service's problem.
@@ -31,14 +34,16 @@ make run-local
 # Register a meeting
 SESSION=$(curl -sX POST localhost:8000/bot-sessions \
   -H 'Content-Type: application/json' \
-  -d '{"meeting_id":"demo-001","meeting_url":"https://meet.google.com/abc-defg-hij"}' \
+  -d '{"meeting_url":"https://meet.google.com/abc-defg-hij"}' \
   | jq -r .session_id)
 
 # Send the bot in, then poll until it is admitted
 curl -sX POST localhost:8000/bot-sessions/$SESSION/start
 curl -s localhost:8000/bot-sessions/$SESSION/status | jq .meeting_status
 
-curl -sX POST localhost:8000/bot-sessions/$SESSION/recording/start
+curl -sX POST localhost:8000/bot-sessions/$SESSION/recording/start \
+  -H 'Content-Type: application/json' \
+  -d '{"meeting_id":"abc-defg-hij_20260917T143045123456IST"}'
 curl -sX POST localhost:8000/bot-sessions/$SESSION/recording/stop
 curl -sX POST localhost:8000/bot-sessions/$SESSION/leave
 ```

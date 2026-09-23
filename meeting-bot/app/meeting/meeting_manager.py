@@ -15,12 +15,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import replace
 
 from app.core.exceptions import MeetingNotFoundError
 from app.core.request_context import bind
 from app.meeting.meeting_session import MeetingSession
-from app.meeting.models import MeetingRequest
+from app.meeting.models import MeetingRequest, meeting_code_from_url, new_recording_meeting_id
 from app.meeting.session_dependencies import SessionDependencies
 from app.meeting_platform.models import ChatMessage
 from app.repositories.base import MeetingLifecycleEvent, MeetingStateRecord
@@ -65,52 +64,24 @@ class MeetingManager:
     def get_session(self, meeting_id: str) -> MeetingSession | None:
         return self._sessions.get(meeting_id)
 
-    def require_session(self, meeting_id: str) -> MeetingSession:
-        """Look up the session a request is for.
+    def require_session(self, identifier: str) -> MeetingSession:
+        """Return the exact meeting or session identified by the caller."""
+        session = self._sessions.get(identifier)
+        if session is None:
+            raise MeetingNotFoundError(identifier)
+        return session
 
-        The id a caller addresses a session by is not always the id the session
-        was registered under. A client that derives the id from the meeting URL
-        on one call and reads it from its own state on the next sends two
-        different strings for one meeting; the join is also free to mint or
-        suffix an id the caller never sees. Resolving strictly turns all of that
-        into a 404 on a bot that is plainly sitting in the meeting being asked
-        about, so the lookup widens in steps, each one still unambiguous:
-
-        1. The id as given.
-        2. The one session minted from it — ``<given>-<suffix>``, which is what
-           :meth:`join_meeting` produces when it disambiguates.
-        3. The only session there is. A pod runs one meeting at a time in the
-           normal case, so "the meeting" is not in doubt even when the id is.
-
-        Ambiguity is never guessed at: two candidates at any step fall through
-        rather than picking one. Every inexact match is logged, because it means
-        a caller is addressing sessions by an id the server did not give it.
-
-        Raises:
-            MeetingNotFoundError: If no session matches, or more than one does.
-        """
-        session = self._sessions.get(meeting_id)
-        if session is not None:
-            return session
-
-        prefix = f"{meeting_id}-"
-        minted = [s for s in self._sessions.all() if s.meeting_id.startswith(prefix)]
-        if len(minted) == 1:
-            logger.warning(
-                "Meeting id matched a session by its generated suffix",
-                extra={"requested_meeting_id": meeting_id, "meeting_id": minted[0].meeting_id},
-            )
-            return minted[0]
-
-        active = self._sessions.all()
-        if len(active) == 1:
-            logger.warning(
-                "Unknown meeting id resolved to the only active session",
-                extra={"requested_meeting_id": meeting_id, "meeting_id": active[0].meeting_id},
-            )
-            return active[0]
-
-        raise MeetingNotFoundError(meeting_id)
+    def require_recording(self, meeting_id: str) -> MeetingSession:
+        """Return the session that owns this meeting's recorder."""
+        matches = [
+            session
+            for session in self._sessions.all()
+            if session.recorder is not None
+            and session.recorder.context.meeting_id == meeting_id
+        ]
+        if len(matches) != 1:
+            raise MeetingNotFoundError(meeting_id)
+        return matches[0]
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -124,24 +95,13 @@ class MeetingManager:
         the caller gets an identifier immediately and polls
         :meth:`session_status` for progress.
 
-        The id the session ends up under is the one on the returned session,
-        not necessarily the one that was asked for: a caller rejoining a meeting
-        it is already in gets a suffixed id rather than a rejected request. That
-        id is what every later call must address the session by, so the join
-        response carries it back.
+        A caller-provided ``sessionId`` is preserved exactly. A duplicate
+        active session is rejected instead of being silently renamed.
 
         Raises:
             MeetingAlreadyActiveError: If the process is at its session limit.
         """
-        # Settled before the session exists, because MeetingRequest is frozen
-        # and the session takes its identity from it.
-        meeting_id = await self._sessions.reserve_meeting_id(request.meeting_id)
-        if meeting_id != request.meeting_id:
-            logger.info(
-                "Meeting id already in use; assigned a unique one",
-                extra={"requested_meeting_id": request.meeting_id, "meeting_id": meeting_id},
-            )
-            request = replace(request, meeting_id=meeting_id)
+        session_id = await self._sessions.reserve_session_id(request.session_id)
 
         try:
             session = MeetingSession(request, self._deps)
@@ -149,10 +109,10 @@ class MeetingManager:
         except BaseException:
             # Nothing will ever register this id now; holding it would leak a
             # key and push the next join of the same meeting onto a suffix.
-            await self._sessions.release_meeting_id(meeting_id)
+            await self._sessions.release_session_id(session_id)
             raise
 
-        with bind(meeting_id=request.meeting_id, session_id=session.session_id):
+        with bind(session_id=session.session_id):
             logger.info(
                 "Joining meeting",
                 extra={
@@ -162,10 +122,10 @@ class MeetingManager:
                 },
             )
             task = asyncio.create_task(
-                self._run_session(session), name=f"session:{request.meeting_id}"
+                self._run_session(session), name=f"session:{request.session_id}"
             )
-            self._startup_tasks[request.meeting_id] = task
-            task.add_done_callback(self._forget_startup_task(request.meeting_id))
+            self._startup_tasks[request.session_id] = task
+            task.add_done_callback(self._forget_startup_task(request.session_id))
 
         return session
 
@@ -180,9 +140,9 @@ class MeetingManager:
         except Exception as error:  # noqa: BLE001 - already logged by the session
             logger.error(
                 "Session ended during startup",
-                extra={"meeting_id": session.meeting_id, "reason": str(error)},
+                extra={"session_id": session.session_id, "reason": str(error)},
             )
-            await self._sessions.remove(session.meeting_id)
+            await self._sessions.remove(session.session_id)
 
     async def leave_meeting(self, meeting_id: str) -> None:
         """Stop a session and deregister it.
@@ -194,13 +154,13 @@ class MeetingManager:
         # The session's own id, not the one asked for: resolution is allowed to
         # be inexact, and removing by the requested id would stop the session
         # while leaving it registered forever.
-        with bind(meeting_id=session.meeting_id, session_id=session.session_id):
+        with bind(session_id=session.session_id):
             try:
                 await self._stop_session(session)
             finally:
                 # Always deregister: a session that failed to stop cleanly must
                 # not block a later join for the same meeting.
-                await self._sessions.remove(session.meeting_id)
+                await self._sessions.remove(session.session_id)
 
     async def shutdown(self) -> None:
         """Stop every session. Called during application shutdown.
@@ -221,7 +181,7 @@ class MeetingManager:
             if isinstance(result, BaseException):
                 logger.warning(
                     "Session did not stop cleanly",
-                    extra={"meeting_id": session.meeting_id, "reason": str(result)},
+                    extra={"session_id": session.session_id, "reason": str(result)},
                 )
 
     async def _stop_session(self, session: MeetingSession) -> None:
@@ -230,13 +190,13 @@ class MeetingManager:
         Cancelling first matters: a join waiting on browser launch or on host
         admission can take minutes, and ``stop`` would otherwise queue behind it.
         """
-        await self._cancel_startup(session.meeting_id)
+        await self._cancel_startup(session.session_id)
         try:
             await asyncio.wait_for(session.stop(), timeout=self._STOP_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             logger.error(
                 "Session teardown exceeded its timeout; abandoning it",
-                extra={"meeting_id": session.meeting_id, "timeout": self._STOP_TIMEOUT_SECONDS},
+                extra={"session_id": session.session_id, "timeout": self._STOP_TIMEOUT_SECONDS},
             )
 
     def _forget_startup_task(self, meeting_id: str) -> Callable[[asyncio.Task[None]], None]:
@@ -268,20 +228,27 @@ class MeetingManager:
 
     async def start_recording(
         self,
-        meeting_id: str,
+        session_id: str,
+        meeting_id: str | None = None,
         max_duration_seconds: int | None = None,
         generate_incremental_highlights: bool = False,
         mode_ids: list[str] | None = None,
-    ) -> None:
+    ) -> str:
         """Begin recording a meeting's audio.
 
         Args:
-            meeting_id: The meeting identifier.
+            session_id: Existing attendance identifier returned by join.
+            meeting_id: Optional caller identifier for this recording.
             max_duration_seconds: Optional maximum duration before auto-uploading this segment.
             generate_incremental_highlights: Whether to request highlights for segments.
             mode_ids: Highlight mode identifiers for this recording only.
         """
-        await self.require_session(meeting_id).start_recording(
+        session = self.require_session(session_id)
+        recording_meeting_id = meeting_id or new_recording_meeting_id(
+            meeting_code_from_url(session.request.meeting_url)
+        )
+        return await session.start_recording(
+            recording_meeting_id=recording_meeting_id,
             max_duration_seconds=max_duration_seconds,
             generate_incremental_highlights=generate_incremental_highlights,
             mode_ids=mode_ids,
@@ -289,7 +256,7 @@ class MeetingManager:
 
     async def stop_recording(self, meeting_id: str) -> None:
         """Stop recording and finalize the upload."""
-        await self.require_session(meeting_id).stop_recording()
+        await self.require_recording(meeting_id).stop_recording()
 
     # ------------------------------------------------------------------
     # Transcription

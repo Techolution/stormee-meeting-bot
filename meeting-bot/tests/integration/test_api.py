@@ -68,10 +68,8 @@ def test_status_reports_configuration_without_secrets(client: TestClient) -> Non
 @pytest.mark.parametrize(
     "payload,bad_field",
     [
-        ({"meetingId": "m1"}, "meetingUrl"),
-        ({"meetingUrl": "https://meet.google.com/abc"}, "meetingId"),
-        ({"meetingId": "m1", "meetingUrl": "meet.google.com/abc"}, "meetingUrl"),
-        ({"meetingId": "  ", "meetingUrl": "https://meet.google.com/abc"}, "meetingId"),
+        ({}, "meetingUrl"),
+        ({"meetingUrl": "meet.google.com/abc"}, "meetingUrl"),
     ],
 )
 def test_join_rejects_invalid_requests(client: TestClient, payload: dict, bad_field: str) -> None:
@@ -86,7 +84,7 @@ def test_join_rejects_invalid_requests(client: TestClient, payload: dict, bad_fi
 def test_play_audio_rejects_out_of_range_volume(client: TestClient) -> None:
     response = client.post(
         f"{PREFIX}/meetings/audio/play",
-        json={"meetingId": "m1", "audioUrl": "https://audio.test/clip.wav", "volume": 1.5},
+        json={"sessionId": "s1", "audioUrl": "https://audio.test/clip.wav", "volume": 1.5},
     )
 
     assert response.status_code == 422
@@ -102,9 +100,13 @@ def test_play_audio_rejects_out_of_range_volume(client: TestClient) -> None:
 @pytest.mark.parametrize(
     "method,path,payload",
     [
-        ("POST", f"{PREFIX}/meetings/leave", {"meetingId": "ghost"}),
-        ("POST", f"{PREFIX}/recordings/start", {"meetingId": "ghost"}),
-        ("POST", f"{PREFIX}/recordings/stop", {"meetingId": "ghost"}),
+        ("POST", f"{PREFIX}/meetings/leave", {"sessionId": "ghost"}),
+        ("POST", f"{PREFIX}/recordings/start", {"sessionId": "ghost"}),
+        (
+            "POST",
+            f"{PREFIX}/recordings/stop",
+            {"meetingId": "ghost"},
+        ),
         ("POST", f"{PREFIX}/transcription/start", {"meetingId": "ghost"}),
         ("POST", f"{PREFIX}/transcription/stop", {"meetingId": "ghost"}),
         ("GET", f"{PREFIX}/recordings/ghost/status", None),

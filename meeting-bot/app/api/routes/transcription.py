@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.dependencies import ManagerDep
+from app.core.time import india_isoformat
 from app.schemas.transcription import (
     ChatMessageModel,
     ChatResponse,
@@ -74,7 +75,7 @@ async def get_chat(meeting_id: str, manager: ManagerDep) -> ChatResponse:
         ChatMessageModel(
             sender=message.sender,
             text=message.text,
-            timestamp=message.received_at.isoformat(),
+            timestamp=india_isoformat(message.received_at) or "",
             message_id=message.message_id,
         )
         for message in messages

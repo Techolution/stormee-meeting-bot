@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from app.core.time import india_isoformat
 from app.domain.enums import BotStatus, MeetingStatus, RecordingStatus, TranscriptionStatus
 
 
@@ -40,14 +41,15 @@ class MeetingEvent:
 
 @dataclass
 class BotSession:
-    """Primary durable session entity (meeting_sessions table).
+    """Primary session entity, independent of its repository implementation.
 
-    ``session_id`` is the only identifier a client needs: the pod assignment
-    below is internal routing state and is never returned in a public response.
+    The default repository is currently process-local; a future shared
+    repository can persist this same model without changing the application
+    layer. Pod assignment below is internal routing state.
     """
     session_id: str
-    meeting_id: str
     meeting_url: str
+    meeting_id: Optional[str] = None
 
     # User & Project Context
     user_name: Optional[str] = None
@@ -102,7 +104,7 @@ class BotSession:
 
     def timestamps(self) -> Dict[str, Any]:
         def iso(value: Optional[datetime]) -> Optional[str]:
-            return value.isoformat() if value else None
+            return india_isoformat(value)
 
         return {
             "created_at": iso(self.created_at),
