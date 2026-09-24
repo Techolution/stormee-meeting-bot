@@ -11,7 +11,7 @@ def generate_backend_signature(
     user_id: str,
     shared_secret: str | None = None,
 ) -> tuple[str, str]:
-    timestamp = int(time.time() * 1000)
+    timestamp = int(time.time() * 10000)
 
     message = f'{timestamp}:{{"userId":"{user_id}"}}'
     if not shared_secret:

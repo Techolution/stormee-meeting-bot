@@ -51,7 +51,6 @@ class BaseHTTPClient:
         self._default_headers = dict(headers or {})
         self._client: httpx.AsyncClient | None = None
         self._lock = asyncio.Lock()
-        self.auth_headers = generate_headers_with_signature()
 
     @property
     def base_url(self) -> str:
@@ -63,12 +62,14 @@ class BaseHTTPClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Return the pooled client, creating it on first use."""
+        auth_headers = generate_headers_with_signature()
+
         if self._client is None or self._client.is_closed:
             async with self._lock:
                 if self._client is None or self._client.is_closed:
                     self._client = httpx.AsyncClient(
                         timeout=httpx.Timeout(self._timeout),
-                        headers={"accept": "application/json", **self._default_headers, **self.auth_headers},
+                        headers={"accept": "application/json", **self._default_headers, **auth_headers},
                         follow_redirects=True,
                     )
         return self._client
