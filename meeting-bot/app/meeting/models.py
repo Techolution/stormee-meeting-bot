@@ -77,6 +77,7 @@ class MeetingRequest:
         *,
         meeting_id: str | None = None,
         mode_ids: list[str] | None = None,
+        agenda: str | None = None,
     ) -> RecordingContext:
         """Attribution the recording pipeline needs to register its upload."""
         return RecordingContext(
@@ -88,6 +89,7 @@ class MeetingRequest:
             user_name=self.user_name,
             user_email=self.user_email,
             mode_ids=tuple(mode_ids or ()),
+            agenda=agenda,
         )
 
 

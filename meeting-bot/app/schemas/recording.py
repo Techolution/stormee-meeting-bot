@@ -26,6 +26,7 @@ class StartRecordingRequest(CamelCaseModel):
                     "maxDurationSeconds": 300,
                     "generateIncrementalHighlights": True,
                     "modeIds": [],
+                    "agenda": "Discuss the Q4 launch plan and assign next steps.",
                 }
             ]
         }
@@ -58,6 +59,11 @@ class StartRecordingRequest(CamelCaseModel):
         default_factory=list,
         alias="modeIds",
         description="Optional: List of highlight categorization mode identifiers for custom highlight generation configuration.",
+    )
+    agenda: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Meeting agenda or description to use as context when generating incremental highlights.",
     )
 
 

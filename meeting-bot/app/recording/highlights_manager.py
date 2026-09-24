@@ -158,7 +158,10 @@ class HighlightsManager:
             "last_duration": last_duration,
             "is_final": is_final,
             "participants": participants or [],
+            "agenda": context.agenda or "",
         }
+        if context.agenda is not None:
+            incremental_mh_metadata["agenda"] = context.agenda
 
         logger.info(
             "Generating incremental highlights",
@@ -168,7 +171,8 @@ class HighlightsManager:
                 "duration_seconds": stats.duration_seconds,
                 "last_duration": last_duration,
                 "is_final": is_final,
-                "participants": participants or []
+                "participants": participants or [],
+                "agenda": context.agenda or "",
             },
         )
 

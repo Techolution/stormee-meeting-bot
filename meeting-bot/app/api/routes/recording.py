@@ -39,6 +39,7 @@ async def start_recording(
         max_duration_seconds=payload.max_duration_seconds,
         generate_incremental_highlights=payload.generate_incremental_highlights,
         mode_ids=payload.mode_ids,
+        agenda=payload.agenda,
     )
     session = manager.require_recording(meeting_id)
     return StartRecordingResponse(

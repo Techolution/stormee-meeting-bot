@@ -148,3 +148,4 @@ class RecordingContext:
     user_name: str = ""
     user_email: str = ""
     mode_ids: tuple[str, ...] = ()
+    agenda: str | None = None

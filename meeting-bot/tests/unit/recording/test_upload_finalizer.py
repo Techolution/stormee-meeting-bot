@@ -12,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.recording.chunk_uploader import UploadOutcome
-from app.recording.models import RecordingContext, RecordingStats
 from app.recording.highlights_manager import HighlightsManager
+from app.recording.models import RecordingContext, RecordingStats
 from app.recording.upload_finalizer import UploadFinalizer
 from tests.conftest import FakeCWClient, FakeMailClient
 
@@ -186,3 +186,27 @@ async def test_participants_are_attached_to_highlights_request(
     assert len(cw.artifacts) == 1
     metadata = cw.artifacts[0]["incremental_mh_metadata"]
     assert metadata["participants"] == ["Alice", "Bob"]
+
+
+async def test_agenda_is_attached_to_incremental_highlights_request() -> None:
+    """The optional agenda gives incremental highlight generation meeting context."""
+    cw = FakeCWClient()
+    finalizer = UploadFinalizer(cw_client=cw, highlights_manager=_highlights(cw))
+    context = RecordingContext(
+        meeting_id="meeting-with-agenda",
+        project_id="project-test",
+        agenda="Review the launch plan and assign next steps.",
+    )
+    stats = RecordingStats(started_at=datetime.now(timezone.utc) - timedelta(minutes=30))
+
+    await finalizer.finalize(
+        context,
+        _uploaded("part1.webm"),
+        stats=stats,
+        is_final_segment=False,
+        segment_number=1,
+        generate_incremental_highlights=True,
+    )
+
+    metadata = cw.artifacts[0]["incremental_mh_metadata"]
+    assert metadata["agenda"] == "Review the launch plan and assign next steps."
