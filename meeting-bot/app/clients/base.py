@@ -21,7 +21,7 @@ from typing import Any
 import httpx
 
 from app.core.exceptions import ExternalServiceError
-from app.clients.cw_auth_utils import generate_headers_with_signature
+from app.clients.cw_auth_utils import generate_jwt
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class BaseHTTPClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Return the pooled client, creating it on first use."""
-        auth_headers = generate_headers_with_signature()
+        auth_headers = {"Authorization": f"Bearer {generate_jwt()}"}
 
         if self._client is None or self._client.is_closed:
             async with self._lock:
