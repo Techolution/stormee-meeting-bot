@@ -12,6 +12,8 @@ time this runs; a failed notification must not be reported as a failed meeting.
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime, timezone
 
 from app.clients.cw_utils import CWUtilsClient, UploadedFile
 from app.clients.mail import MailClient
@@ -49,6 +51,8 @@ class UploadFinalizer:
         segment_number: int = 1,
         generate_incremental_highlights: bool = False,
         participants: list[str] | None = None,
+        recording_started_at: datetime | None = None,
+        recording_ended_at: datetime | None = None,
     ) -> bool:
         """Confirm the upload with CW and start follow-up processing.
 
@@ -71,6 +75,24 @@ class UploadFinalizer:
             True if CW accepted the confirmation. False when the step was
             skipped or failed — both are logged with the reason.
         """
+        processing_started = time.perf_counter()
+        lifecycle = {
+            "meeting_id": context.meeting_id,
+            "segment_number": segment_number,
+            "is_final_segment": is_final_segment,
+            "recording_started_at": recording_started_at.isoformat()
+            if recording_started_at
+            else None,
+            "recording_ended_at": recording_ended_at.isoformat() if recording_ended_at else None,
+            "recording_duration_ms": round(
+                (recording_ended_at - recording_started_at).total_seconds() * 1000
+            )
+            if recording_started_at and recording_ended_at
+            else None,
+            "uploaded_bytes": outcome.uploaded_bytes,
+        }
+        logger.info("Segment downstream processing started", extra=lifecycle)
+
         skip_reason = self._skip_reason(context, outcome)
         if skip_reason:
             logger.info(
@@ -119,7 +141,7 @@ class UploadFinalizer:
 
         logger.info(
             "Recording registered with CW",
-            extra={"meeting_id": context.meeting_id, "object_name": uploaded.filename},
+            extra={**lifecycle, "object_name": uploaded.filename},
         )
 
         # Every upload that lands gets exactly one artifact request, and the
@@ -136,6 +158,18 @@ class UploadFinalizer:
             )
         else:
             await self._request_artifact(context, uploaded.filename, participants)
+
+        logger.info(
+            "Segment sent to downstream processing",
+            extra={
+                **lifecycle,
+                "object_name": uploaded.filename,
+                "downstream_sent_at": datetime.now(timezone.utc).isoformat(),
+                "total_processing_duration_ms": round(
+                    (time.perf_counter() - processing_started) * 1000
+                ),
+            },
+        )
 
         if is_final_segment:
             await self._notify_user(context)

@@ -68,6 +68,7 @@ class Recorder:
         self._segment_number = 1  # Current segment number (1-indexed)
         self._last_segment_upload_duration = 0.0  # Duration (in seconds) at which last segment was uploaded
         self._segment_upload_in_progress = False  # Guard flag to prevent concurrent segment uploads
+        self._segment_started_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # State
@@ -152,6 +153,15 @@ class Recorder:
 
             self._status = RecordingStatus.RECORDING
             self._stats.started_at = datetime.now(timezone.utc)
+            self._segment_started_at = self._stats.started_at
+            logger.info(
+                "Recording segment started",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "segment_number": self._segment_number,
+                    "recording_started_at": self._segment_started_at.isoformat(),
+                },
+            )
 
     async def stop(self) -> UploadOutcome:
         """Stop recording, flush everything, and run post-upload processing.
@@ -177,6 +187,24 @@ class Recorder:
 
             outcome = await self._uploader.finalize()
             self._stats.stopped_at = datetime.now(timezone.utc)
+            segment_ended_at = self._stats.stopped_at
+            logger.info(
+                "Recording segment ended",
+                extra={
+                    "meeting_id": self._context.meeting_id,
+                    "segment_number": self._segment_number,
+                    "recording_started_at": self._segment_started_at.isoformat()
+                    if self._segment_started_at
+                    else None,
+                    "recording_ended_at": segment_ended_at.isoformat(),
+                    "recording_duration_ms": round(
+                        (segment_ended_at - self._segment_started_at).total_seconds() * 1000
+                    )
+                    if self._segment_started_at
+                    else None,
+                    "is_final_segment": True,
+                },
+            )
             self._status = RecordingStatus.STOPPED
 
             logger.info(
@@ -212,7 +240,11 @@ class Recorder:
                 segment_number=self._segment_number,  # Current segment (last one)
                 generate_incremental_highlights=self._generate_incremental_highlights,
                 participants=final_participants,
+                recording_started_at=self._segment_started_at,
+                recording_ended_at=segment_ended_at,
             )
+
+        await self._uploader.aclose()
 
         return outcome
 
@@ -225,6 +257,7 @@ class Recorder:
             await self._platform.stop_recording()
         except Exception as error:  # noqa: BLE001 - already shutting down
             logger.debug("Recorder stop failed during abort", extra={"reason": str(error)})
+        await self._uploader.aclose()
         self._status = RecordingStatus.FAILED
         logger.warning("Recording aborted", extra={"meeting_id": self._context.meeting_id})
 
@@ -252,16 +285,60 @@ class Recorder:
         The segment is uploaded with highlights, and a new uploader is created for the
         next segment. Recording continues uninterrupted.
         """
+        segment_ended_at = datetime.now(timezone.utc)
+        logger.info(
+            "Recording segment ended; finalizing upload",
+            extra={
+                "meeting_id": self._context.meeting_id,
+                "segment_number": self._segment_number,
+                "recording_started_at": self._segment_started_at.isoformat()
+                if self._segment_started_at
+                else None,
+                "recording_ended_at": segment_ended_at.isoformat(),
+                "recording_duration_ms": round(
+                    (segment_ended_at - self._segment_started_at).total_seconds() * 1000
+                )
+                if self._segment_started_at
+                else None,
+            },
+        )
+
         # Finalize the current segment upload
+        completed_segment_number = self._segment_number
+        completed_segment_started_at = self._segment_started_at
         outcome = await self._uploader.finalize()
 
         logger.info(
             "Segment upload finalized",
             extra={
                 "meeting_id": self._context.meeting_id,
-                "segment_number": self._segment_number,
+                "segment_number": completed_segment_number,
                 "complete": outcome.complete,
                 "bytes": outcome.uploaded_bytes,
+            },
+        )
+
+        # Open the next segment before any slow CW/artifact calls. Audio capture
+        # continues during downstream processing, so delaying reinitialization
+        # would make those chunks write into the finalized segment's deleted
+        # temporary directory.
+        self._last_segment_upload_duration = self._stats.duration_seconds
+        self._segment_number += 1
+        logger.info(
+            "Preparing next segment for recording",
+            extra={
+                "meeting_id": self._context.meeting_id,
+                "next_segment_number": self._segment_number,
+            },
+        )
+        await self._uploader.reinitialize(self._context)
+        self._segment_started_at = segment_ended_at
+        logger.info(
+            "Recording segment started",
+            extra={
+                "meeting_id": self._context.meeting_id,
+                "segment_number": self._segment_number,
+                "recording_started_at": self._segment_started_at.isoformat(),
             },
         )
 
@@ -272,7 +349,7 @@ class Recorder:
                 "Sending incremental segment with speakers",
                 extra={
                     "meeting_id": self._context.meeting_id,
-                    "segment_number": self._segment_number,
+                    "segment_number": completed_segment_number,
                     "speakers": current_participants,
                     "speaker_count": len(current_participants),
                 },
@@ -282,27 +359,12 @@ class Recorder:
                 outcome=outcome,
                 stats=self._stats,
                 is_final_segment=False,
-                segment_number=self._segment_number,
+                segment_number=completed_segment_number,
                 generate_incremental_highlights=self._generate_incremental_highlights,
                 participants=current_participants,
+                recording_started_at=completed_segment_started_at,
+                recording_ended_at=segment_ended_at,
             )
-
-        # Update segment tracking
-        self._last_segment_upload_duration = self._stats.duration_seconds
-        self._segment_number += 1
-
-        logger.info(
-            "Preparing next segment for recording",
-            extra={
-                "meeting_id": self._context.meeting_id,
-                "next_segment_number": self._segment_number,
-            },
-        )
-
-        # Re-initialize uploader for the next segment
-        # For direct uploads, this creates a new resumable URL
-        # For streaming, this updates context and lets audio service handle segmentation
-        await self._uploader.reinitialize(self._context)
 
     def _participant_names(self) -> list[str]:
         """Names of everyone who has spoken so far, for segment attribution."""

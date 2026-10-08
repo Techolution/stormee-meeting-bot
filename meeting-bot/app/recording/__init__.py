@@ -16,6 +16,7 @@ from app.recording.audio_buffer import AudioBuffer
 from app.recording.audio_capture import AudioCapture
 from app.recording.chunk_uploader import (
     ChunkUploader,
+    ContinuousMP3ChunkUploader,
     DirectChunkUploader,
     StreamingChunkUploader,
     UploadOutcome,
@@ -36,6 +37,7 @@ __all__ = [
     "AudioChunk",
     "ChunkSequencer",
     "ChunkUploader",
+    "ContinuousMP3ChunkUploader",
     "DirectChunkUploader",
     "Recorder",
     "RecordingContext",

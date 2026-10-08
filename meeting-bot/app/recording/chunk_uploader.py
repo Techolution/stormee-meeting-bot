@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from abc import ABC, abstractmethod
 
@@ -88,6 +89,10 @@ class ChunkUploader(ABC):
             The number of chunks successfully sent.
         """
         return 0
+
+    async def aclose(self) -> None:
+        """Release transport-local resources after recording has ended."""
+        return None
 
     def segment_duration_seconds(self) -> float | None:
         """Audio captured into the current segment, in seconds of media time.
@@ -591,3 +596,200 @@ def _object_name(meeting_id: str) -> str:
     """
     safe = meeting_id.replace("/", "_").replace(":", "_").strip() or "meeting"
     return f"{safe}_{uuid.uuid4()}.webm"
+
+
+class ContinuousMP3ChunkUploader(ChunkUploader):
+    """Continuously transcode WebM into resumably uploaded MP3 blocks."""
+
+    transport = "direct"
+
+    def __init__(
+        self,
+        *,
+        cw_client: CWUtilsClient,
+        storage: ResumableUploadClient,
+        stats: RecordingStats,
+        block_size_bytes: int = 256 * 1024,
+    ) -> None:
+        self._cw = cw_client
+        self._storage = storage
+        self._stats = stats
+        self._block_size = block_size_bytes
+        self._context: RecordingContext | None = None
+        self._sequencer: ChunkSequencer | None = None
+        self._segmenter: WebMSegmenter | None = None
+        self._process: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[bytes] | None = None
+        self._target: ResumableUploadTarget | None = None
+        self._state: ResumableUploadState | None = None
+        self._mp3_pending = bytearray()
+        self._input_written = False
+        self._webm_bytes = 0
+        self._encoder_started_at = 0.0
+        self._segment_number = 1
+        self._preinitialized = False
+        self._lock = asyncio.Lock()
+
+    async def start(self, context: RecordingContext) -> None:
+        self._context = context
+        self._sequencer = ChunkSequencer(meeting_id=context.meeting_id)
+        self._segmenter = WebMSegmenter(meeting_id=context.meeting_id)
+        await self._start_encoder()
+        logger.info(
+            "Continuous WebM-to-MP3 conversion started",
+            extra={"meeting_id": context.meeting_id, "segment_number": self._segment_number},
+        )
+
+    async def _start_encoder(self) -> None:
+        self._target = None
+        self._state = None
+        self._mp3_pending.clear()
+        self._input_written = False
+        self._webm_bytes = 0
+        self._encoder_started_at = time.perf_counter()
+        self._process = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-loglevel", "error", "-f", "webm", "-i", "pipe:0",
+            "-acodec", "libmp3lame", "-b:a", "64k", "-ar", "16000", "-ac", "1",
+            "-f", "mp3", "pipe:1",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._reader_task = asyncio.create_task(self._read_mp3_output())
+        assert self._process.stderr is not None
+        self._stderr_task = asyncio.create_task(self._process.stderr.read())
+
+    async def upload(self, chunk: AudioChunk) -> None:
+        async with self._lock:
+            assert self._sequencer is not None and self._segmenter is not None
+            if not self._sequencer.accept(chunk):
+                return
+            for ready in self._sequencer.release_ready():
+                self._segmenter.feed(ready.data)
+            await self._write_webm(self._segmenter.drain())
+
+    async def _write_webm(self, data: bytes) -> None:
+        if data:
+            assert self._process is not None and self._process.stdin is not None
+            self._process.stdin.write(data)
+            await self._process.stdin.drain()
+            self._input_written = True
+            self._webm_bytes += len(data)
+
+    async def _ensure_target(self) -> None:
+        if self._state is not None:
+            return
+        assert self._context is not None and self._context.project_id
+        safe = self._context.meeting_id.replace("/", "_").replace(":", "_")
+        filename = f"{safe}_{uuid.uuid4()}.mp3"
+        self._target = await self._cw.create_resumable_upload(
+            project_id=self._context.project_id,
+            filename=filename,
+            content_type="audio/mpeg",
+        )
+        self._state = ResumableUploadState(
+            upload_url=self._target.upload_url, content_type="audio/mpeg"
+        )
+
+    async def _read_mp3_output(self) -> None:
+        assert self._process is not None and self._process.stdout is not None
+        while block := await self._process.stdout.read(64 * 1024):
+            self._mp3_pending.extend(block)
+            while len(self._mp3_pending) > self._block_size:
+                await self._ensure_target()
+                assert self._state is not None and self._context is not None
+                upload_block = bytes(self._mp3_pending[: self._block_size])
+                await self._storage.upload_block(
+                    self._state, upload_block, is_final=False,
+                    meeting_id=self._context.meeting_id,
+                )
+                del self._mp3_pending[: self._block_size]
+
+    async def finalize(self) -> UploadOutcome:
+        async with self._lock:
+            assert self._context is not None and self._sequencer is not None and self._segmenter is not None
+            for chunk in self._sequencer.release_all():
+                self._segmenter.feed(chunk.data)
+            await self._write_webm(self._segmenter.cut())
+            if not self._input_written:
+                await self._stop_encoder()
+                return UploadOutcome(complete=False, detail="no audio was captured")
+
+            try:
+                assert self._process is not None and self._process.stdin is not None
+                self._process.stdin.close()
+                await self._process.stdin.wait_closed()
+                assert self._reader_task is not None
+                await self._reader_task
+                returncode = await self._process.wait()
+                stderr = await self._stderr_task if self._stderr_task else b""
+                if returncode != 0:
+                    raise ChunkUploadError(
+                        f"ffmpeg exited with status {returncode}: "
+                        f"{stderr.decode(errors='replace')[-500:]}"
+                    )
+                if not self._mp3_pending:
+                    return UploadOutcome(complete=False, detail="ffmpeg produced no MP3 data")
+                await self._ensure_target()
+                assert self._state is not None and self._target is not None
+                await self._storage.upload_block(
+                    self._state, bytes(self._mp3_pending), is_final=True,
+                    meeting_id=self._context.meeting_id,
+                )
+                self._mp3_pending.clear()
+                self._stats.chunks_uploaded += self._state.block_count
+                self._stats.bytes_uploaded += self._state.uploaded_bytes
+                logger.info(
+                    "Continuous MP3 segment conversion and upload completed",
+                    extra={
+                        "meeting_id": self._context.meeting_id,
+                        "segment_number": self._segment_number,
+                        "webm_bytes": self._webm_bytes,
+                        "mp3_bytes": self._state.uploaded_bytes,
+                        "blocks": self._state.block_count,
+                        "conversion_and_upload_duration_ms": round(
+                            (time.perf_counter() - self._encoder_started_at) * 1000
+                        ),
+                    },
+                )
+                return UploadOutcome(
+                    complete=True,
+                    uploaded_chunks=self._state.block_count,
+                    uploaded_bytes=self._state.uploaded_bytes,
+                    public_url=self._target.public_url,
+                )
+            finally:
+                self._segment_number += 1
+                await self._start_encoder()
+                self._preinitialized = True
+
+    def pending_count(self) -> int:
+        return self._sequencer.pending_count if self._sequencer else 0
+
+    def segment_duration_seconds(self) -> float | None:
+        if self._segmenter is None or self._segmenter.degraded:
+            return None
+        return self._segmenter.segment_duration_ms / 1000.0
+
+    async def reinitialize(self, context: RecordingContext) -> None:
+        async with self._lock:
+            self._context = context
+            if self._preinitialized:
+                self._preinitialized = False
+                return
+            self._segment_number += 1
+            await self._start_encoder()
+
+    async def aclose(self) -> None:
+        async with self._lock:
+            await self._stop_encoder()
+
+    async def _stop_encoder(self) -> None:
+        if self._process is not None and self._process.returncode is None:
+            self._process.kill()
+            await self._process.wait()
+        for task in (self._reader_task, self._stderr_task):
+            if task is not None and not task.done():
+                task.cancel()
+        self._process = None

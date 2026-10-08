@@ -58,7 +58,7 @@ from app.meeting_platform.registry import create_platform
 from app.recording.audio_buffer import AudioBuffer
 from app.recording.chunk_uploader import (
     ChunkUploader,
-    DirectChunkUploader,
+    ContinuousMP3ChunkUploader,
     StreamingChunkUploader,
 )
 from app.recording.models import RecordingStats, RecordingStatus
@@ -430,12 +430,11 @@ class MeetingSession:
                 extra={"meeting_id": self.meeting_id},
             )
 
-        return DirectChunkUploader(
+        return ContinuousMP3ChunkUploader(
             cw_client=self._deps.cw_client,
             storage=self._deps.storage_client,
             stats=stats,
             block_size_bytes=recording.resumable_block_size_bytes,
-            content_type=recording.content_type,
         )
 
     async def stop_recording(self) -> None:
