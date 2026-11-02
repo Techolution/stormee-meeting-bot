@@ -159,6 +159,7 @@ class HighlightsManager:
             "is_final": is_final,
             "participants": participants or [],
             "agenda": context.agenda or "",
+            "meeting_title": context.meeting_title or "",
         }
         if context.agenda is not None:
             incremental_mh_metadata["agenda"] = context.agenda
