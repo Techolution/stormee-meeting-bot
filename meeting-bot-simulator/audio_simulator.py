@@ -485,6 +485,70 @@ def export_metadata_to_json(
         logger.error("Failed to write metadata to JSON: %s", str(e))
         raise IOError(f"Failed to write JSON file: {json_path}") from e
 
+def extract_audio_from_video(
+    video_file: str,
+    output_dir: str,
+) -> str:
+    os.makedirs(output_dir, exist_ok=True)
+
+    audio_file = os.path.join(
+        output_dir,
+        "extracted_audio.mp3",
+    )
+
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-i", video_file,
+            "-vn",
+            "-c:a", "libmp3lame",
+            "-q:a", "4",
+            "-y",
+            audio_file,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Audio extraction failed: {result.stderr}"
+        )
+
+    return audio_file
+
+def download_video(source: str, output_dir: str, insecure_download: bool = False) -> str:
+    os.makedirs(output_dir, exist_ok=True)
+
+    parsed = urlparse(source)
+    suffix = Path(parsed.path).suffix or ".mp4"
+    destination = os.path.join(output_dir, f"source_video{suffix}")
+
+    if source.startswith("gs://"):
+        subprocess.run(
+            ["gsutil", "cp", source, destination],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    elif parsed.scheme in ("http", "https"):
+        request = Request(source, headers={"User-Agent": "meeting-bot-audio-simulator/1.0"})
+
+        context = (
+            ssl._create_unverified_context()
+            if insecure_download
+            else ssl.create_default_context(cafile=certifi.where())
+        )
+
+        with urlopen(request, timeout=120, context=context) as response:
+            with open(destination, "wb") as output:
+                while data := response.read(1024 * 1024):
+                    output.write(data)
+    else:
+        raise ValueError("Video source must be a gs:// URI or HTTP(S) signed URL")
+
+    return destination
 
 def main() -> None:
     """Download, split, upload, and request incremental artifacts for an audio source."""
@@ -499,6 +563,7 @@ Examples:
   python audio_simulator.py --audio-url 'https://signed-url...' --duration 5 --time-span 10 --project-id abc123
   python audio_simulator.py --audio-file meeting.mp3 --duration 10 --chunk-size 120 --project-id abc123
   python audio_simulator.py --audio-file meeting.mp3 --duration 10 --time-span 20 --project-id abc123
+  python audio_simulator.py --audio-file meeting.mp3 --duration 10 --project-id abc123 --user-email alice@example.com --agenda 'Weekly sync'
         """,
     )
 
@@ -513,6 +578,14 @@ Examples:
         "--signed-url",
         dest="audio_url",
         help="gs:// object URI or HTTP(S) signed download URL",
+    )
+    source_group.add_argument(
+    "--video-file",
+    help="Local video file (MP4, MOV, MKV, AVI, etc.)",
+    )
+    source_group.add_argument(
+        "--video-url",
+        help="gs:// URI or HTTP(S) signed video URL",
     )
     parser.add_argument(
         "--duration",
@@ -595,11 +668,36 @@ Examples:
         if not project_id:
             raise ValueError("Set PROJECT_ID (or pass --project-id) to upload audio parts")
 
-        audio_file = args.audio_file or download_audio(
-            args.audio_url,
-            args.output_dir,
-            insecure_download=args.insecure_download,
-        )
+        if args.video_file:
+            video_file = args.video_file
+
+        elif args.video_url:
+            video_file = download_video(
+                args.video_url,
+                args.output_dir,
+                insecure_download=args.insecure_download,
+            )
+
+        else:
+            video_file = None
+
+
+        if video_file:
+            logger.info("Extracting audio from video...")
+            audio_file = extract_audio_from_video(
+                video_file,
+                args.output_dir,
+            )
+
+        elif args.audio_file:
+            audio_file = args.audio_file
+
+        else:
+            audio_file = download_audio(
+                args.audio_url,
+                args.output_dir,
+                insecure_download=args.insecure_download,
+            )
         if not os.path.isfile(audio_file):
             raise FileNotFoundError(f"Audio file not found: {audio_file}")
 

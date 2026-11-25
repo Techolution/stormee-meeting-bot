@@ -96,9 +96,27 @@ Generated files include `chunk_NNN.mp3` and `chunks_metadata.json`. The JSON rec
 Example
 
 python3 meeting-bot-simulator/audio_simulator.py \
-  --audio-url 'https://storage.googleapis.com/creative-workspace/projects/6aeb5ca45acc8a332ebbf017/owy-tsjr-zne_dsm_4th_2026_031a32e0-dc92-40cf-a084-4b8b424a6f2e.mp3?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=deploy-genie%40proposal-auto-ai-internal.iam.gserviceaccount.com%2F20261104%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261104T182715Z&X-Goog-Expires=10800&X-Goog-SignedHeaders=host&X-Goog-Signature=5982fe718cad98726ce6542548120c05411dbd1abf14fa5d806234b08cc679b8b8397750aef6d53438f4f72696aec7fa2d11feb8a5eb7be0243859999a1ffaaca643ea9cef4cd4a9c9e2edb14558a6b4338db215ec1a09a311dd29559c331b954a661bb44f086b0bdd0016647dcd219fce0fd8162fb58b2f402d32e5847e9d2e4e7d056b1d4b18ad980d1a11e1bd0a2de22acb60aa932b539a63014ff51d9ef1a87571d903ca091a13f3510e248f8f2726e9bcb94c62f20cee347d277d76d7061136163dd627b87e08e20c56d8039d6b662e69909a69951d79aeeaf842c75bee3ce98f9c04f406abb96b627c340300e0c84174a2430563aacddade255f23eac2' \
+  --audio-url 'https://storage.googleapis.com/creative-workspace/projects/6aeb5ca45acc8a332ebbf017/owy-tsjr-zne_dsm_4th_2026_031a32e0-dc92-40cf-a084-4b8b424a6f2e.mp3?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=deploy-genie%40proposal-auto-ai-internal.iam.gserviceaccount.com%2F20261105%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261105T135711Z&X-Goog-Expires=10800&X-Goog-SignedHeaders=host&X-Goog-Signature=3dfd07e3d6b09ca211fe4c1559ba7815749db3c9e31adc5c56ab03062fa8284e478d153c8b8d35e80e7b396c28dfcf4b75741c15de94f8bb11a303d041fedd0ceb9d2a131d1979a545d8eafb6dc01dec0c352f2fb9809a4c67ef683cb71ba2a0e3188e35c760c7bc1353eb330c0af8e0a96dd0f36539552446f501ffaa02803495d15adbd5fb8291bf48deb7535d4fe02d27993df5d07decd95217f844c8995db92a7d9a28c3218e81bf2e8dfa4c7813823581dd9629449e22e37ac832182ef779ffd0c687b6ab493a57bbbefb41a5cf1d43ed59646f50bb7ad77969d740e7b741479b02f259edaab5b2dd60c81a27c7cf1ad789f1c3f669280319fb573303bb' \
   --duration 3 \
   --project-id 6aeb5ca45acc8a332ebbf017 \
 --meeting-id owy-tsjr-zne_dsm_4th_2026_local \
 --user-email "mehul.singh@techolution.com" \
+  --agenda "Requirement AI DSM begins with a productivity review, focusing on individual ECG scores, overall app usage versus VS Code time, and active coding hours. Team members with lower VS Code or ECG metrics will briefly share context on their blockers or non-coding tasks for the day. Right after the productivity review, we will review Solution Advantage slides—a concise overview outlining core problems, target metrics, proposed solutions, solution KPIs, and identified gaps. Following this, we will dive into project-specific roadmap updates, UX reviews, and feature demos. Depending on daily priority, we will cover Requirement AI 3.0—focusing on User Story processing—and Meeting Advantage AI / MeetingBot, covering updates across meeting transcription, classification, analytics, and contextualization"
+
+
+  python3 meeting-bot-simulator/audio_simulator.py \
+  --video-file '/Users/swikritshukla/Desktop/stormee-meeting-bot/meeting-bot-simulator/Requirement AI DSF - Invite Team Members - 2026_11_05 11_28 EST - Recording.mp4' \
+  --duration 3 \
+  --project-id 6aece2fea6d6846b1af9eace \
+--meeting-id testdsm_5nov_localv2 \
+--user-email "siddhartha.chunduru@techolution.com" \
+  --agenda "Requirement AI DSM begins with a productivity review, focusing on individual ECG scores, overall app usage versus VS Code time, and active coding hours. Team members with lower VS Code or ECG metrics will briefly share context on their blockers or non-coding tasks for the day. Right after the productivity review, we will review Solution Advantage slides—a concise overview outlining core problems, target metrics, proposed solutions, solution KPIs, and identified gaps. Following this, we will dive into project-specific roadmap updates, UX reviews, and feature demos. Depending on daily priority, we will cover Requirement AI 3.0—focusing on User Story processing—and Meeting Advantage AI / MeetingBot, covering updates across meeting transcription, classification, analytics, and contextualization"
+
+
+    python3 meeting-bot-simulator/audio_simulator.py \
+  --audio-file '/Users/swikritshukla/Desktop/stormee-meeting-bot/audio_chunks/owy-tsjr-zne_november_24th_2026_ab002936-c761-452b-89b1-df6670d28c30.mp3' \
+  --duration 3 \
+  --project-id 6b06c5a0e49da763ff86897c \
+--meeting-id testdsm_24nov_localv3 \
+--user-email "swikrit.shukla@techolution.com" \
   --agenda "Requirement AI DSM begins with a productivity review, focusing on individual ECG scores, overall app usage versus VS Code time, and active coding hours. Team members with lower VS Code or ECG metrics will briefly share context on their blockers or non-coding tasks for the day. Right after the productivity review, we will review Solution Advantage slides—a concise overview outlining core problems, target metrics, proposed solutions, solution KPIs, and identified gaps. Following this, we will dive into project-specific roadmap updates, UX reviews, and feature demos. Depending on daily priority, we will cover Requirement AI 3.0—focusing on User Story processing—and Meeting Advantage AI / MeetingBot, covering updates across meeting transcription, classification, analytics, and contextualization"
